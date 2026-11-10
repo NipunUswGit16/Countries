@@ -1,0 +1,8 @@
+{{/*
+NetworkPolicy: event-handler
+Helper: kairos.eventHandlerNetworkPolicy
+Location: kairos-component-common/charts/kairos-components-common/templates/_network-policy.tpl
+Admits only systemPort. The event-adapter sidecar uses loopback.
+Opt out: event-handler.networkPolicy.enabled: false
+*/}}
+{{ include "kairos.eventHandlerNetworkPolicy" (dict "root" .) }}

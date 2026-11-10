@@ -1,0 +1,37 @@
+asyncapi: 3.1.0
+info:
+    title: countries
+    version: "1.0"
+defaultContentType: application/json
+components:
+    schemas:
+        CloudEventBinaryHeaders:
+            properties:
+                ce_correlationid:
+                    type: string
+                ce_id:
+                    type: string
+                ce_ifsprivate:
+                    type: string
+                ce_ifstenantid:
+                    type: string
+                ce_source:
+                    type: string
+                ce_specversion:
+                    const: "1.0"
+                    type: string
+                ce_subject:
+                    type: string
+                ce_traceparent:
+                    type: string
+                content-type:
+                    const: application/json
+                    type: string
+            required:
+                - ce_id
+                - ce_source
+                - ce_subject
+                - ce_specversion
+                - ce_ifstenantid
+            type: object
+    messages: {}

@@ -1,0 +1,295 @@
+image: golang:1.27.3@sha256:2920bb124f1a2e12a1d39f0cab756ae0068441ee1da7655dec7f5e374944095b
+
+options:
+  size: 2x # doubling memory size of the entire pipe
+
+definitions:
+  configure-bitbucket-git-auth: &configure-bitbucket-git-auth |
+    git config --global url."https://x-token-auth:${KAIROS_BB_ACCESS_TOKEN}@bitbucket.org/".insteadOf https://bitbucket.org/
+  caches:
+#    sonar: ~/.sonar/cache
+    gomodules: /go/pkg/mod
+    trivy: .trivycache
+    # golangci-lint is go install'd into bin/ by the toolkit. The version pin
+    # lives in that module, so the key is go.mod: a toolkit bump changes it.
+    golangci-lint:
+      key:
+        files:
+          - go.mod
+      path: bin
+  services:
+    docker:
+      memory: 4096
+  imports:
+    nexus-ci: nexus-ci:main:.bitbucket/v0/shared-pipelines.yml
+  steps:
+    # - step: &vera-code-pack
+    #     name: Veracode Package
+    #     script:
+    #       - apt-get update
+    #       - apt-get install -y zip
+    #       - *configure-bitbucket-git-auth
+    #       - export APP_PATH=$(find . -name go.mod -exec dirname {} \; | head -n 1 | xargs realpath)
+    #       - cd ${APP_PATH}
+    #       #veracode does not support go 1.24.3, so we need to use 1.24.0, replace the go version in the go.mod file
+    #       - sed -i 's/go 1\.27\.[0-9]\+/go 1.27.0/g' go.mod
+    #       - go mod tidy
+    #       - go mod vendor
+    #       # veracode requires the code to be inside a folder in the zip file
+    #       - cd ..
+    #       - mkdir -p ${BITBUCKET_CLONE_DIR}/veracode
+    #       - zip -r ${BITBUCKET_CLONE_DIR}/veracode/${BITBUCKET_REPO_SLUG}.zip . -i "*.go" -i "**vendor/modules.txt" -i "*.mod" -i "*.sum"
+    #     artifacts:
+    #       - "veracode/*.zip"
+    # - step: &vera-code-analysis
+    #     name: Veracode Pipeline Scan SAST
+    #     image: veracode/pipeline-scan:26.9.0@sha256:65d29e457b16e25e535658e40405dda6e19895576e19aad13fd5d930566bcf83
+    #     script:
+    #       - java -jar /opt/veracode/pipeline-scan.jar --veracode_api_id ${VERACODE_API_ID} --veracode_api_key ${VERACODE_API_KEY} --file veracode/${BITBUCKET_REPO_SLUG}.zip -jf $results.sast.json -fjf $results.sast.filtered.json
+    #     artifacts:
+    #       - "**/*.sast.json"
+    #       - "**/*.sast.filtered.json"
+    # - step: &vera-code-sca
+    #     name: Veracode Agent Based SCA Scan
+    #     script:
+    #       # For this scan to work, a bitbucket agent in veracode must be setup and it's token set in SRCCLR_API_TOKEN
+    #       # See https://docs.veracode.com/r/t_sc_bitbucket_token
+    #       - export APP_PATH=$(find . -name go.mod -exec dirname {} \; | head -n 1 | xargs realpath)
+    #       - *configure-bitbucket-git-auth
+    #       - curl -sSL https://download.sourceclear.com/ci.sh | SCAN_DIR="${APP_PATH}" sh;
+    # - step: &vera-code-app-scan
+    #     name: Veracode Upload and Scan SAST, SCA (Policy/Sandbox)
+    #     image: veracode/api-wrapper-java:26.10.20.1@sha256:cfdb8ea641a0b5b160afc3920d1995deeb722fb902b5c5e79cf6a711cc56ca11
+    #     script:
+    #       # An application profile must be created in veracode with the same name as the repo slug
+    #       - java -jar /opt/veracode/api-wrapper.jar -vid ${VERACODE_API_ID} -vkey ${VERACODE_API_KEY} -action UploadAndScan -appname ${BITBUCKET_REPO_SLUG} -createprofile true -autoscan true -filepath veracode/${BITBUCKET_REPO_SLUG}.zip -version $BITBUCKET_BUILD_NUMBER
+    # - step: &sonarcloud-analysis
+    #     name: SonarCloud Analysis
+    #     caches:
+    #       - sonar
+    #     script:
+    #       - |
+    #         set -euo pipefail
+    #         mapfile -t unit_cov < <(find . -name coverage-unit.out -not -path './.git/*' 2>/dev/null || true)
+    #         mapfile -t func_cov < <(find . -name coverage-functional.out -not -path './.git/*' 2>/dev/null || true)
+    #         if [ ${#unit_cov[@]} -eq 0 ] && [ ${#func_cov[@]} -eq 0 ] && [ ! -f coverage.out ]; then
+    #           echo "No coverage files found, skipping SonarCloud analysis."
+    #           exit 0
+    #         fi
+    #         if [ ${#unit_cov[@]} -gt 0 ] || [ ${#func_cov[@]} -gt 0 ]; then
+    #           echo "mode: atomic" > coverage.out
+    #           for f in "${unit_cov[@]}"; do tail -n +2 "$f" >> coverage.out; done
+    #           for f in "${func_cov[@]}"; do tail -n +2 "$f" >> coverage.out; done
+    #         fi
+    #       - pipe: docker://sonarsource/sonarcloud-scan:4.1.0@sha256:d74c579a8bd0ebe998c0645c5b366ee9f52cdb2b833bed7f5cea1311f0648d56
+    #         variables:
+    #           SONAR_TOKEN: $SONAR_TOKEN
+    #       - pipe: docker://sonarsource/sonarcloud-quality-gate:0.2.0@sha256:6ad70de6f5f1610c1dfe463956192b7ea20beffde18ba704ff80ff5ecef3130c
+    #     artifacts:
+    #       download:
+    #         - "Lint Artifacts"
+    #         - "Unit Test Artifacts"
+    #         - "Functional Test Artifacts"
+    - step: &sec
+        name: Security Scan (gosec)
+        script:
+          - *configure-bitbucket-git-auth
+          - export GOPRIVATE=bitbucket.org/ifs-pd
+          - make sec
+        caches:
+          - gomodules
+    - step: &codegen-validation
+        name: Codegen Validation
+        script:
+          - *configure-bitbucket-git-auth
+          - export GOPRIVATE=bitbucket.org/ifs-pd
+          # jq + mikefarah/yq are required by make generate-openapi (invoked from make generate)
+          - apt-get update && apt-get install -y --no-install-recommends jq curl ca-certificates
+          - |
+            YQ_VERSION=v4.53.2
+            ARCH=$(dpkg --print-architecture)
+            curl -sSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${ARCH}"
+            chmod +x /usr/local/bin/yq
+            yq --version
+          - go mod download
+          - make generate
+          - |
+            # Whole-tree porcelain check (not a path allowlist, not git diff):
+            # make generate also runs go mod tidy and may write asyncapi, masterdata
+            # entities, db-script-runner jobVersion, loaders, etc. Any modified,
+            # staged, or untracked file means committed output is stale.
+            GENERATED_CHANGES=$(git status --porcelain --untracked-files=all)
+            if [ -z "$GENERATED_CHANGES" ]; then
+              echo "✓ make generate produced no changes — generated files and go.mod/go.sum are up-to-date"
+            else
+              echo "✗ ERROR: make generate produced uncommitted changes!"
+              echo ""
+              echo "Generated outputs and/or go.mod/go.sum differ from committed versions."
+              echo "Run 'make generate' locally, commit the result, and push."
+              echo ""
+              echo "Alternatively, ensure the pre-push hook is installed:"
+              echo "  make install-hooks"
+              echo ""
+              printf '%s\n' "$GENERATED_CHANGES"
+              git --no-pager diff -- || true
+              exit 1
+            fi
+        caches:
+          - gomodules
+    - step: &lint
+        name: Linter
+        script:
+          - *configure-bitbucket-git-auth
+          - export GOPRIVATE=bitbucket.org/ifs-pd
+          - go mod download
+          - make lint
+        artifacts:
+          download: false
+          upload:
+            - name: "Lint Artifacts"
+              type: shared
+              paths:
+                - "**/golangci-lint-report.xml"
+        caches:
+          - gomodules
+          - golangci-lint
+    - step: &unit-test
+        name: Unit Tests
+        script:
+          - *configure-bitbucket-git-auth
+          - export GOPRIVATE=bitbucket.org/ifs-pd
+          - go mod download
+          - make test-unit
+        artifacts:
+          download: false
+          upload:
+            - name: "Unit Test Artifacts"
+              type: shared
+              paths:
+                - "**/govet-report.out"
+                - "**/coverage-unit.out"
+                - "**/report-unit.json"
+                - "**/test-reports/report-unit.xml"
+        caches:
+          - gomodules
+    - step: &functional-test
+        name: Functional Tests
+        script:
+          - *configure-bitbucket-git-auth
+          - export GOPRIVATE=bitbucket.org/ifs-pd
+          - go mod download
+          - make test-functional
+        services:
+          - docker
+        artifacts:
+          download: false
+          upload:
+            - name: "Functional Test Artifacts"
+              type: shared
+              paths:
+                - "**/coverage-functional.out"
+                - "**/report-functional.json"
+                - "**/test-reports/report-functional.xml"
+        caches:
+          - gomodules
+    - step: &check-local-dev-deps
+        name: Check local-dev dependencies
+        # Fails the build on dependency wiring that only resolves on a developer's
+        # machine: out-of-repo go.mod `replace` directives and file:// Helm chart
+        # deps.
+        #
+        # The checker lives in the shared toolkit and is fetched into a CLEAN
+        # scratch module rather than located via `go list -m` against this repo:
+        # a local replace pointing the toolkit (or any lib) at a sibling checkout
+        # absent in CI — exactly what this step exists to catch — would otherwise
+        # break `go mod download`/`go list` here before the check could run.
+        # `go mod edit -json` is a purely textual read, so reading the pinned
+        # toolkit version still works on those offending branches.
+        script:
+          - *configure-bitbucket-git-auth
+          - export GOPRIVATE=bitbucket.org/ifs-pd
+          - |
+            set -euo pipefail
+            TOOLKIT_MOD=bitbucket.org/ifs-pd/kairos-component-common/toolkit
+            VER=$(go mod edit -json | grep -A1 "\"$TOOLKIT_MOD\"" | grep '"Version"' \
+                  | head -1 | sed -E 's/.*"Version": "([^"]+)".*/\1/')
+            if [ -z "$VER" ]; then
+              echo "✗ could not determine $TOOLKIT_MOD version from go.mod" >&2
+              exit 1
+            fi
+            SCRATCH=$(mktemp -d)
+            ( cd "$SCRATCH" && go mod init check-bootstrap >/dev/null \
+                && go get "${TOOLKIT_MOD}@${VER}" )
+            TOOLKIT_DIR=$(cd "$SCRATCH" && go list -m -f '{{.Dir}}' "$TOOLKIT_MOD")
+            bash "$TOOLKIT_DIR/scripts/check-local-dev-deps.sh" "$BITBUCKET_CLONE_DIR"
+        caches:
+          - gomodules
+    - step: &trivy-scan
+        name: Trivy Scan
+        image: aquasec/trivy:0.76.0@sha256:2416d1f74045b57274df1a340eee6b510cacd73c66a6ccb8da092b117eb7d222
+        artifacts:
+          download: false
+        script:
+          - trivy --cache-dir .trivycache fs --no-progress --severity HIGH,CRITICAL --exit-code 1 ./
+        caches:
+          - trivy
+    - step: &release-libraries
+        name: Release libraries
+        script:
+          - *configure-bitbucket-git-auth
+          - export GOPRIVATE=bitbucket.org/ifs-pd
+          - go mod download
+          - git config user.name "Renovate Bot <$KAIROS_RENOVATE_BITBUCKET_EMAIL>"
+          - git config user.email "$KAIROS_RENOVATE_BITBUCKET_EMAIL"
+          - |
+            TOOLKIT_DIR=$(go list -m -f '{{.Dir}}' bitbucket.org/ifs-pd/kairos-component-common/toolkit)
+            bash "$TOOLKIT_DIR/scripts/auto-release.sh"
+        caches:
+          - gomodules
+clone:
+  depth: full
+
+pipelines:
+  
+  pull-requests:
+    "**": # this trigger will make the pipeline run for all Pull Requests
+      - parallel:
+        - step: *codegen-validation
+        - step: *check-local-dev-deps
+        - step: *lint
+        - step: *sec
+        - step: *unit-test
+        - step: *functional-test
+        - step: *trivy-scan
+    #  - parallel:
+    #    - step: *sonarcloud-analysis
+    #    - step: *vera-code-sca
+    #    - step: *vera-code-pack
+    #  - step: *vera-code-analysis
+
+  branches:
+    "main":
+      - parallel:
+        - step: *codegen-validation
+        - step: *check-local-dev-deps
+        - step: *lint
+        - step: *sec
+        - step: *unit-test
+        - step: *functional-test
+        - step: *trivy-scan
+#      - parallel:
+#        - step: *sonarcloud-analysis
+#        - step: *vera-code-sca
+#        - step: *vera-code-pack
+#      - parallel:
+#        - step: *vera-code-analysis
+#        - step: *vera-code-app-scan
+      - step: *release-libraries
+
+  custom:
+    rollout:
+      import: kairos-component-rollout@nexus-ci
+    hotfix-rollout:
+      import: kairos-component-hotfix-rollout@nexus-ci
+    preview:
+      import: kairos-component-preview@nexus-ci

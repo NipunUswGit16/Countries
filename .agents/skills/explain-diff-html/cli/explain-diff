@@ -1,0 +1,1057 @@
+#!/usr/bin/env bash
+# Browse and open explain-diff-html pages with fzf typeahead.
+# Compatible with macOS system bash 3.2+.
+set -euo pipefail
+
+ARCHIVE="${EXPLAIN_DIFF_DIR:-$HOME/.local/share/explain-diff}"
+PORT="${EXPLAIN_DIFF_PORT:-7432}"
+HOST="${EXPLAIN_DIFF_HOST:-127.0.0.1}"
+
+# Resolve symlinks so ~/.local/bin/explain-diff → repo/cli, not ~/.local/.
+_source="${BASH_SOURCE[0]:-$0}"
+while [[ -L "$_source" ]]; do
+  _dir="$(cd "$(dirname "$_source")" && pwd)"
+  _link="$(readlink "$_source")"
+  case "$_link" in
+    /*) _source="$_link" ;;
+    *) _source="$_dir/$_link" ;;
+  esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$_source")" && pwd)"
+unset _source _dir _link
+
+# This file lives in <skill>/cli/. Pack copy and this checkout both resolve
+# VERSION / .venv / .env from the skill directory.
+if [[ -f "$SCRIPT_DIR/../ask/serve.py" ]]; then
+  SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+  REPO_ROOT="$SKILL_DIR"
+else
+  REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+  SKILL_DIR="$REPO_ROOT/skills/explain-diff-html"
+fi
+if [[ -n "${EXPLAIN_DIFF_SKILL:-}" ]] && [[ -f "${EXPLAIN_DIFF_SKILL}/ask/serve.py" ]]; then
+  SKILL_DIR="$EXPLAIN_DIFF_SKILL"
+elif [[ ! -f "$SKILL_DIR/ask/serve.py" ]]; then
+  _hint="${ARCHIVE}/skill-root"
+  if [[ -f "$_hint" ]]; then
+    _hinted="$(tr -d '[:space:]' < "$_hint")"
+    if [[ -f "$_hinted/ask/serve.py" ]]; then
+      SKILL_DIR="$_hinted"
+    fi
+  fi
+  unset _hint _hinted
+fi
+SERVE_PY="$SKILL_DIR/ask/serve.py"
+
+cli_version() {
+  local f v
+  for f in "$SKILL_DIR/VERSION" "$REPO_ROOT/VERSION"; do
+    [[ -f "$f" ]] || continue
+    v="$(tr -d '[:space:]' < "$f")"
+    if [[ -n "$v" ]]; then
+      printf '%s' "$v"
+      return
+    fi
+  done
+  printf '%s' "0.0.0-dev"
+}
+
+cli_revision() {
+  git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || true
+}
+
+print_version() {
+  local ver rev
+  ver="$(cli_version)"
+  rev="$(cli_revision)"
+  if [[ -n "$rev" ]]; then
+    printf 'explain-diff %s (%s)\n' "$ver" "$rev"
+  else
+    printf 'explain-diff %s\n' "$ver"
+  fi
+  printf '%s\n' "$REPO_ROOT"
+}
+
+# Load a .env without overriding already-exported vars. bash 3.2-safe.
+load_env_file() {
+  local envf="$1" line key val
+  [[ -f "$envf" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    key="${line%%=*}"
+    val="${line#*=}"
+    key="$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    val="$(printf '%s' "$val" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^["'\'']//;s/["'\'']$//')"
+    [[ -n "$key" ]] || continue
+    if eval "[ -n \"\${$key+set}\" ]"; then
+      continue
+    fi
+    export "$key=$val"
+  done < "$envf"
+}
+
+# Skill .env first (wins), then git toplevel — pack checkout often keeps the key there.
+load_repo_env() {
+  local git_root
+  load_env_file "$SKILL_DIR/.env"
+  load_env_file "$REPO_ROOT/.env"
+  git_root="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "$git_root" ]]; then
+    load_env_file "$git_root/.env"
+  fi
+}
+load_repo_env
+
+# ANSI helpers (respect NO_COLOR).
+USE_COLOR=1
+if [[ -n "${NO_COLOR:-}" ]]; then
+  USE_COLOR=0
+fi
+
+usage() {
+  printf 'explain-diff %s — list / open generated explain-diff HTML pages\n\n' "$(cli_version)"
+  cat <<'EOF'
+Usage:
+  explain-diff              Interactive fzf picker → open via local serve if possible
+  explain-diff open [query] Same as default; optional initial fzf query
+  explain-diff serve        Start localhost Ask sidecar (blocks)
+  explain-diff list         Print matching entries (newest first)
+  explain-diff dir          Print archive directory
+  explain-diff path [query] Print path of selected page (no open)
+  explain-diff version      Print version, git rev, and checkout path
+  explain-diff ensure-deps  Create skill .venv and install ask/requirements.txt
+  explain-diff ensure-serve Start Ask sidecar in the background if needed
+  explain-diff help         This help
+
+Env:
+  EXPLAIN_DIFF_DIR    Archive directory (default: ~/.local/share/explain-diff)
+  EXPLAIN_DIFF_PORT   Serve port (default: 7432)
+  EXPLAIN_DIFF_HOST   Serve host (default: 127.0.0.1 — localhost only)
+  EXPLAIN_DIFF_MODEL  Cursor model for Ask (default: composer-2.5)
+  CURSOR_API_KEY     Required for the Cursor agent harness (not for Ollama)
+  OLLAMA_HOST        Local Ollama (default http://127.0.0.1:11434)
+  NO_COLOR           Disable age-bucket colors
+
+Picker / TTY list show a colored relative age beside each page.
+`serve` exposes /health, /p/<page>.html, /ask/* (CSS/JS), and WS /api/chat for the Ask panel.
+`open` prefers http://127.0.0.1:$PORT/p/<file>?ask=1. First launch creates
+<skill>/.venv and installs ask/requirements.txt if starlette/uvicorn are missing.
+If serve still cannot start, opens the HTML without Ask (file://). Cursor chat
+needs CURSOR_API_KEY; Ollama chat needs a running daemon. Either backend is enough.
+
+Requires: fzf. Ask sidecar needs Python ≥3.10 (venv is created next to the skill).
+EOF
+}
+
+ensure_archive() {
+  mkdir -p "$ARCHIVE"
+}
+
+# Plain-text article intro for fzf --preview. stdlib only; do not use resolve_python.
+preview_page() {
+  local file="$1"
+  if [[ ! -f "$file" ]]; then
+    echo "not found: $file"
+    return 1
+  fi
+  python3 - "$file" <<'PY'
+import html
+import os
+import re
+import sys
+import textwrap
+from html.parser import HTMLParser
+
+path = sys.argv[1]
+try:
+    width = int(os.environ.get("FZF_PREVIEW_COLUMNS") or os.environ.get("COLUMNS") or 56)
+except ValueError:
+    width = 56
+width = max(32, min(width, 100))
+color = not os.environ.get("NO_COLOR")
+
+
+def paint(code: str, text: str) -> str:
+    if not color:
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
+def wrap(text: str, indent: str = "") -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+    return textwrap.fill(
+        text,
+        width=width,
+        initial_indent=indent,
+        subsequent_indent=indent,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+
+
+class Preview(HTMLParser):
+    SKIP_TAGS = frozenset({"script", "style", "pre", "figure", "table", "svg"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.title = ""
+        self.doc_title = ""
+        self.summary = ""
+        self.meta = ""
+        self.toc: list[str] = []
+        self.headings: list[tuple[int, str]] = []
+        self.intro: list[str] = []
+        self._buf: list[str] = []
+        self._capture = ""
+        self._skip = 0
+        self._in_header = False
+        self._in_nav = False
+        self._in_quiz = False
+        self._section_id = ""
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        ad = dict(attrs)
+        cls = ad.get("class", "")
+        if tag in self.SKIP_TAGS:
+            self._skip += 1
+            return
+        if self._skip:
+            return
+        if tag == "title":
+            self._start("doc_title")
+        elif tag == "header":
+            self._in_header = True
+        elif tag == "nav":
+            self._in_nav = True
+        elif tag == "section":
+            self._section_id = ad.get("id", "")
+            if self._section_id == "quiz":
+                self._in_quiz = True
+        elif tag == "h1":
+            self._start("title")
+        elif tag == "p" and "summary" in cls.split():
+            self._start("summary")
+        elif tag == "p" and "meta" in cls.split():
+            self._start("meta")
+        elif tag in ("h2", "h3") and not self._in_nav and not self._in_quiz:
+            self._start("h2" if tag == "h2" else "h3")
+        elif (
+            tag == "p"
+            and not self._in_header
+            and not self._in_nav
+            and not self._in_quiz
+            and self._section_id != "quiz"
+            and len(self.intro) < 4
+            and not self._capture
+        ):
+            self._start("intro")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self.SKIP_TAGS and self._skip:
+            self._skip -= 1
+            return
+        if self._skip:
+            return
+        if tag == "header":
+            self._in_header = False
+        elif tag == "nav":
+            self._in_nav = False
+        elif tag == "section":
+            self._in_quiz = False
+            self._section_id = ""
+        if tag in ("title", "h1", "h2", "h3", "p") and self._capture:
+            self._flush()
+
+    def handle_data(self, data: str) -> None:
+        if self._skip or not self._capture:
+            return
+        self._buf.append(data)
+
+    def _start(self, kind: str) -> None:
+        self._flush()
+        self._capture = kind
+        self._buf = []
+
+    def _flush(self) -> None:
+        if not self._capture:
+            return
+        text = html.unescape(re.sub(r"\s+", " ", "".join(self._buf))).strip()
+        kind = self._capture
+        self._capture = ""
+        self._buf = []
+        if not text:
+            return
+        if kind == "doc_title":
+            self.doc_title = text
+        elif kind == "title":
+            self.title = text
+        elif kind == "summary":
+            self.summary = text
+        elif kind == "meta":
+            self.meta = text
+        elif kind == "h2":
+            self.headings.append((2, text))
+            if text.lower() != "quiz":
+                self.toc.append(text)
+        elif kind == "h3":
+            self.headings.append((3, text))
+        elif kind == "intro":
+            self.intro.append(text)
+
+
+try:
+    raw = open(path, encoding="utf-8", errors="replace").read()
+except OSError as exc:
+    print(f"cannot read: {exc}")
+    sys.exit(1)
+
+parser = Preview()
+try:
+    parser.feed(raw)
+    parser.close()
+except Exception:
+    pass
+
+title = parser.title or parser.doc_title or os.path.basename(path)
+lines = [paint("1;38;5;110", title), ""]
+if parser.summary:
+    lines.append(wrap(parser.summary))
+    lines.append("")
+if parser.meta:
+    lines.append(paint("38;5;245", wrap(parser.meta)))
+    lines.append("")
+outline = [h for h in parser.toc if h.lower() != "quiz"][:8]
+if outline:
+    lines.append(paint("1;38;5;245", "Contents"))
+    for item in outline:
+        lines.append(paint("38;5;244", "  · " + item))
+    lines.append("")
+if parser.headings:
+    first = next((h for h in parser.headings if h[0] == 2 and h[1].lower() != "quiz"), None)
+    if first:
+        lines.append(paint("1;38;5;151", first[1]))
+for para in parser.intro[:3]:
+    lines.append(wrap(para))
+    lines.append("")
+
+text = "\n".join(lines).rstrip()
+if not text.strip():
+    text = os.path.basename(path)
+print(text)
+PY
+}
+
+# True when CURSOR_API_KEY is present and not an obvious placeholder.
+api_key_configured() {
+  local k="${CURSOR_API_KEY:-}"
+  k="$(printf '%s' "$k" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  [[ -n "$k" ]] || return 1
+  case "$(printf '%s' "$k" | tr '[:upper:]' '[:lower:]')" in
+    …|...|changeme|change-me|your-key|your_key|todo|xxx|replace-me|replace_me|cursor_api_key)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+ollama_base() {
+  local h="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+  case "$h" in
+    http://*|https://*) ;;
+    *) h="http://${h}" ;;
+  esac
+  printf '%s' "${h%/}"
+}
+
+# Daemon up with at least one tag. The Cursor key is not required for this path.
+ollama_ready() {
+  local url py
+  url="$(ollama_base)/api/tags"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 1 "$url" 2>/dev/null | grep -q '"name"'
+    return $?
+  fi
+  py="$(bootstrap_python 2>/dev/null || command -v python3)"
+  [[ -n "$py" ]] || return 1
+  "$py" - "$url" <<'PY' 2>/dev/null
+import json, sys, urllib.request
+try:
+    raw = urllib.request.urlopen(sys.argv[1], timeout=1).read()
+    data = json.loads(raw.decode("utf-8", "replace"))
+except Exception:
+    sys.exit(1)
+sys.exit(0 if data.get("models") else 1)
+PY
+}
+
+_banner() {
+  local color="$1"
+  shift
+  if [[ "$USE_COLOR" -eq 1 ]] && [[ -n "$color" ]]; then
+    printf '\n\033[%sm' "$color" >&2
+  else
+    printf '\n' >&2
+  fi
+  cat >&2
+  if [[ "$USE_COLOR" -eq 1 ]] && [[ -n "$color" ]]; then
+    printf '\033[0m\n' >&2
+  else
+    printf '\n' >&2
+  fi
+}
+
+# Cursor harness needs CURSOR_API_KEY + cursor-sdk. Ollama does not.
+# Banner only when something is missing; Ollama-only is an info, not a failure.
+warn_ask_backends() {
+  local has_cursor=0 has_ollama=0
+  api_key_configured && has_cursor=1
+  ollama_ready && has_ollama=1
+
+  if [[ "$has_cursor" -eq 1 ]] && [[ "$has_ollama" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ "$has_cursor" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ "$has_ollama" -eq 1 ]]; then
+    if resolve_python >/dev/null 2>&1; then
+      _banner "1;36" <<'EOF'
+╔══════════════════════════════════════════════════════════════╗
+║  Ask will use local Ollama                                   ║
+║                                                              ║
+║  CURSOR_API_KEY is unset — the Cursor agent harness is off.  ║
+║  Ollama is up, so the sidecar will open with local models.   ║
+║  Set the key if you want the Cursor backend in the picker.   ║
+╚══════════════════════════════════════════════════════════════╝
+EOF
+    else
+      _banner "1;33" <<'EOF'
+╔══════════════════════════════════════════════════════════════╗
+║  Ollama is up but Ask sidecar Python deps are missing        ║
+║                                                              ║
+║  First open/serve creates <skill>/.venv and pip-installs     ║
+║  ask/requirements.txt. If this persists, pip failed.         ║
+╚══════════════════════════════════════════════════════════════╝
+EOF
+    fi
+    return 0
+  fi
+  _banner "1;33" <<'EOF'
+╔══════════════════════════════════════════════════════════════╗
+║  WARNING  no Ask backend                                     ║
+║                                                              ║
+║  CURSOR_API_KEY is missing and Ollama is not reachable.      ║
+║  The page still opens without chat.                          ║
+║                                                              ║
+║  Cursor harness: export CURSOR_API_KEY (or a .env).          ║
+║  Local models:   start `ollama serve` with at least one tag. ║
+╚══════════════════════════════════════════════════════════════╝
+EOF
+}
+
+_python_is_310() {
+  local ver
+  ver="$("$1" -c 'import sys; print("%d.%d" % (sys.version_info[0], sys.version_info[1]))' 2>/dev/null || true)"
+  case "$ver" in
+    3.1[0-9]|3.[2-9][0-9]) return 0 ;;
+  esac
+  return 1
+}
+
+# Any 3.10+ — stdlib only (venv, urllib). Not the Ask interpreter.
+# PATH first, then Homebrew prefixes (often missing in non-login shells),
+# then an existing repo venv that can create another one.
+bootstrap_python() {
+  local cand path pack
+  for cand in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
+    path="$(command -v "$cand" 2>/dev/null || true)"
+    [[ -n "$path" ]] || continue
+    if _python_is_310 "$path"; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+  done
+  for path in \
+    /opt/homebrew/bin/python3.14 \
+    /opt/homebrew/bin/python3.13 \
+    /opt/homebrew/bin/python3.12 \
+    /opt/homebrew/bin/python3 \
+    /usr/local/bin/python3.14 \
+    /usr/local/bin/python3.13 \
+    /usr/local/bin/python3
+  do
+    [[ -x "$path" ]] || continue
+    if _python_is_310 "$path"; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+  done
+  pack="$(_pack_root)"
+  for path in \
+    "$SKILL_DIR/.venv/bin/python" \
+    "$REPO_ROOT/.venv/bin/python" \
+    "${pack:+$pack/.venv/bin/python}"
+  do
+    [[ -n "$path" ]] && [[ -x "$path" ]] || continue
+    if _python_is_310 "$path"; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+  done
+  return 1
+}
+
+python_has_ask_deps() {
+  local py="$1"
+  [[ -n "$py" ]] && [[ -x "$py" ]] || return 1
+  "$py" -c 'import starlette, uvicorn' >/dev/null 2>&1
+}
+
+_pack_root() {
+  git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true
+}
+
+# Skill venv, pack venv, then PATH. Caller filters by deps.
+_python_candidates() {
+  local root pack py
+  for root in "$SKILL_DIR" "$REPO_ROOT"; do
+    [[ -x "$root/.venv/bin/python" ]] && printf '%s\n' "$root/.venv/bin/python"
+    [[ -x "$root/.venv/bin/python3" ]] && printf '%s\n' "$root/.venv/bin/python3"
+  done
+  pack="$(_pack_root)"
+  if [[ -n "$pack" ]]; then
+    [[ -x "$pack/.venv/bin/python" ]] && printf '%s\n' "$pack/.venv/bin/python"
+    [[ -x "$pack/.venv/bin/python3" ]] && printf '%s\n' "$pack/.venv/bin/python3"
+  fi
+  for py in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
+    command -v "$py" 2>/dev/null || true
+  done
+  for py in \
+    /opt/homebrew/bin/python3.14 \
+    /opt/homebrew/bin/python3.13 \
+    /opt/homebrew/bin/python3 \
+    /usr/local/bin/python3
+  do
+    [[ -x "$py" ]] && printf '%s\n' "$py"
+  done
+}
+
+# First candidate that already imports starlette+uvicorn. Empty → not ready.
+resolve_python() {
+  local py
+  while IFS= read -r py; do
+    [[ -n "$py" ]] || continue
+    if python_has_ask_deps "$py"; then
+      printf '%s\n' "$py"
+      return 0
+    fi
+  done <<EOF
+$(_python_candidates)
+EOF
+  return 1
+}
+
+# Reuse a ready interpreter, or create $SKILL_DIR/.venv and pip install.
+# Prints the interpreter path on stdout; progress on stderr.
+ensure_ask_python() {
+  local py boot
+  py="$(resolve_python)" && {
+    printf '%s\n' "$py"
+    return 0
+  }
+
+  if [[ ! -f "$SKILL_DIR/ask/requirements.txt" ]]; then
+    echo "ask/requirements.txt missing under $SKILL_DIR" >&2
+    return 1
+  fi
+
+  boot="$(bootstrap_python)" || {
+    echo "Ask sidecar needs Python ≥3.10 to create $SKILL_DIR/.venv" >&2
+    return 1
+  }
+
+  echo "creating Ask venv: $SKILL_DIR/.venv  (python: $boot)" >&2
+  if ! "$boot" -m venv "$SKILL_DIR/.venv"; then
+    echo "failed to create $SKILL_DIR/.venv" >&2
+    return 1
+  fi
+  py="$SKILL_DIR/.venv/bin/python"
+  if [[ ! -x "$py" ]]; then
+    py="$SKILL_DIR/.venv/bin/python3"
+  fi
+  echo "installing Ask deps into $SKILL_DIR/.venv …" >&2
+  if ! "$py" -m pip install -q -r "$SKILL_DIR/ask/requirements.txt"; then
+    echo "pip install failed — Ask sidecar deps missing" >&2
+    echo "  $py -m pip install -r \"$SKILL_DIR/ask/requirements.txt\"" >&2
+    return 1
+  fi
+  if ! python_has_ask_deps "$py"; then
+    echo "Ask venv created but starlette/uvicorn still missing" >&2
+    return 1
+  fi
+  printf '%s\n' "$py"
+}
+
+file_mtime() {
+  case "$(uname -s)" in
+    Darwin) stat -f '%m' "$1" ;;
+    *) stat -c '%Y' "$1" ;;
+  esac
+}
+
+# Midnight epoch for YYYY-MM-DD (local time).
+day_start() {
+  local ymd="$1"
+  case "$(uname -s)" in
+    Darwin) date -j -f '%Y-%m-%d %H:%M:%S' "${ymd} 00:00:00" '+%s' ;;
+    *) date -d "${ymd} 00:00:00" '+%s' ;;
+  esac
+}
+
+ymd_from_epoch() {
+  local epoch="$1"
+  case "$(uname -s)" in
+    Darwin) date -r "$epoch" '+%Y-%m-%d' ;;
+    *) date -d "@${epoch}" '+%Y-%m-%d' ;;
+  esac
+}
+
+# Print: CLASS<TAB>LABEL
+relative_age() {
+  local epoch="$1"
+  local now="${2:-}"
+  if [[ -z "$now" ]]; then
+    now="$(date +%s)"
+  fi
+
+  local diff=$((now - epoch))
+  if [[ "$diff" -lt 0 ]]; then
+    diff=0
+  fi
+
+  local file_ymd now_ymd file_mid now_mid day_diff
+  file_ymd="$(ymd_from_epoch "$epoch")"
+  now_ymd="$(ymd_from_epoch "$now")"
+  file_mid="$(day_start "$file_ymd")"
+  now_mid="$(day_start "$now_ymd")"
+  day_diff=$(( (now_mid - file_mid) / 86400 ))
+  if [[ "$day_diff" -lt 0 ]]; then
+    day_diff=0
+  fi
+
+  local mins=$((diff / 60))
+  local hours=$((diff / 3600))
+
+  if [[ "$day_diff" -eq 0 ]]; then
+    if [[ "$mins" -lt 1 ]]; then
+      printf '%s\t%s\n' now 'just now'
+    elif [[ "$mins" -lt 60 ]]; then
+      printf '%s\t%s\n' now "${mins}m ago"
+    elif [[ "$hours" -lt 12 ]]; then
+      printf '%s\t%s\n' today "${hours}h ago"
+    else
+      printf '%s\t%s\n' today today
+    fi
+    return
+  fi
+
+  if [[ "$day_diff" -eq 1 ]]; then
+    printf '%s\t%s\n' yesterday yesterday
+    return
+  fi
+
+  if [[ "$day_diff" -le 6 ]]; then
+    printf '%s\t%s\n' week "${day_diff}d ago"
+    return
+  fi
+
+  if [[ "$day_diff" -le 13 ]]; then
+    printf '%s\t%s\n' lastweek 'last week'
+    return
+  fi
+
+  if [[ "$day_diff" -le 20 ]]; then
+    printf '%s\t%s\n' weeks '2w ago'
+    return
+  fi
+
+  if [[ "$day_diff" -le 27 ]]; then
+    printf '%s\t%s\n' weeks '3w ago'
+    return
+  fi
+
+  if [[ "$day_diff" -lt 365 ]]; then
+    local months=$((day_diff / 30))
+    if [[ "$months" -lt 1 ]]; then
+      months=1
+    fi
+    printf '%s\t%s\n' month "${months}mo ago"
+    return
+  fi
+
+  local years=$((day_diff / 365))
+  if [[ "$years" -lt 1 ]]; then
+    years=1
+  fi
+  printf '%s\t%s\n' year "${years}y ago"
+}
+
+colorize_label() {
+  local class="$1"
+  local label="$2"
+  local width="${3:-11}"
+  local padded
+  padded="$(printf "%-${width}s" "$label")"
+
+  if [[ "$USE_COLOR" -eq 0 ]]; then
+    printf '%s' "$padded"
+    return
+  fi
+
+  local code
+  case "$class" in
+    now)       code='38;5;82' ;;
+    today)     code='38;5;114' ;;
+    yesterday) code='38;5;81' ;;
+    week)      code='38;5;220' ;;
+    lastweek)  code='38;5;208' ;;
+    weeks)     code='38;5;177' ;;
+    month)     code='38;5;245' ;;
+    year)      code='38;5;240' ;;
+    *)         code='39' ;;
+  esac
+  printf '\033[%sm%s\033[0m' "$code" "$padded"
+}
+
+format_row() {
+  local path="$1"
+  local now="${2:-}"
+  local epoch class label base colored
+  epoch="$(file_mtime "$path")"
+  # shellcheck disable=SC2162
+  IFS=$'\t' read class label <<EOF
+$(relative_age "$epoch" "$now")
+EOF
+  base="$(basename "$path")"
+  colored="$(colorize_label "$class" "$label")"
+  printf '%s  %s\t%s\n' "$colored" "$base" "$path"
+}
+
+collect_paths() {
+  ensure_archive
+  local dir f
+  local -a found
+  found=()
+
+  for dir in "$ARCHIVE" /tmp "$HOME"; do
+    [[ -d "$dir" ]] || continue
+    for f in "$dir"/*-explanation-*.html "$dir"/*explanation*.html; do
+      [[ -f "$f" ]] || continue
+      found+=("$f")
+    done
+  done
+
+  if [[ "${#found[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  local path epoch
+  local -a lines
+  lines=()
+  for path in "${found[@]}"; do
+    epoch="$(file_mtime "$path")"
+    lines+=("${epoch} ${path}")
+  done
+
+  printf '%s\n' "${lines[@]}" \
+    | sort -rn \
+    | awk '{
+        path = $0
+        sub(/^[0-9]+ /, "", path)
+        n = split(path, a, "/")
+        base = a[n]
+        if (!(base in seen)) {
+          seen[base] = 1
+          print path
+        }
+      }'
+}
+
+open_file() {
+  local file="$1"
+  if [[ ! -f "$file" ]]; then
+    echo "not found: $file" >&2
+    exit 1
+  fi
+  case "$(uname -s)" in
+    Darwin) open "$file" ;;
+    *) xdg-open "$file" >/dev/null 2>&1 || open "$file" ;;
+  esac
+  echo "$file"
+}
+
+open_url() {
+  local url="$1"
+  case "$(uname -s)" in
+    Darwin) open "$url" ;;
+    *) xdg-open "$url" >/dev/null 2>&1 || open "$url" ;;
+  esac
+  echo "$url"
+}
+
+health_ok() {
+  local url="http://${HOST}:${PORT}/health"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 1 "$url" >/dev/null 2>&1
+    return $?
+  fi
+  local py
+  py="$(bootstrap_python 2>/dev/null || command -v python3)"
+  [[ -n "$py" ]] || return 1
+  "$py" - "$url" <<'PY' 2>/dev/null
+import sys, urllib.request
+urllib.request.urlopen(sys.argv[1], timeout=1).read()
+PY
+}
+
+wait_healthy() {
+  local attempts="${1:-25}" i
+  for i in $(seq 1 "$attempts"); do
+    if health_ok; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+ensure_server() {
+  if health_ok; then
+    return 0
+  fi
+  if [[ ! -f "$SERVE_PY" ]]; then
+    echo "serve.py missing: $SERVE_PY" >&2
+    echo "hint: run from the explain-diff-html checkout, or set EXPLAIN_DIFF_SKILL" >&2
+    return 1
+  fi
+  local py pidfile logfile old
+  py="$(ensure_ask_python)" || return 1
+  pidfile="${TMPDIR:-/tmp}/explain-diff-serve-${PORT}.pid"
+  logfile="${TMPDIR:-/tmp}/explain-diff-serve-${PORT}.log"
+
+  # Stale PID that never became healthy — recycle once.
+  if [[ -f "$pidfile" ]]; then
+    old="$(cat "$pidfile" 2>/dev/null || true)"
+    if [[ -n "$old" ]] && kill -0 "$old" 2>/dev/null; then
+      echo "serve pid $old alive but /health failed — restarting…" >&2
+      kill "$old" 2>/dev/null || true
+      sleep 0.3
+      kill -0 "$old" 2>/dev/null && kill -9 "$old" 2>/dev/null || true
+    fi
+    rm -f "$pidfile"
+  fi
+
+  echo "starting explain-diff serve on ${HOST}:${PORT}…" >&2
+  echo "  python: $py" >&2
+  echo "  skill:  $SERVE_PY" >&2
+  nohup "$py" "$SERVE_PY" --host "$HOST" --port "$PORT" --archive "$ARCHIVE" \
+    >"$logfile" 2>&1 &
+  echo $! >"$pidfile"
+
+  if wait_healthy 30; then
+    return 0
+  fi
+  echo "serve failed to become healthy; last log lines:" >&2
+  tail -n 20 "$logfile" >&2 || true
+  return 1
+}
+
+page_url() {
+  local file="$1"
+  local base
+  base="$(basename "$file")"
+  printf 'http://%s:%s/p/%s?ask=1\n' "$HOST" "$PORT" "$base"
+}
+
+open_page() {
+  local file="$1"
+  local url
+  url="$(page_url "$file")"
+  if ensure_server; then
+    open_url "$url"
+    return
+  fi
+  echo "Ask sidecar not available on ${HOST}:${PORT} — opening without chat." >&2
+  open_file "$file"
+}
+
+cmd_serve() {
+  local py
+  if [[ ! -f "$SERVE_PY" ]]; then
+    echo "serve.py missing: $SERVE_PY" >&2
+    exit 1
+  fi
+  py="$(ensure_ask_python)" || exit 1
+  warn_ask_backends
+  ensure_archive
+  exec "$py" "$SERVE_PY" --host "$HOST" --port "$PORT" --archive "$ARCHIVE" "$@"
+}
+
+cmd_ensure_deps() {
+  local py
+  py="$(ensure_ask_python)" || exit 1
+  echo "$py"
+}
+
+cmd_ensure_serve() {
+  ensure_archive
+  ensure_server || exit 1
+}
+
+row_path() {
+  local line="$1"
+  printf '%s\n' "${line##*$'\t'}"
+}
+
+format_rows() {
+  local paths now path
+  paths="$(collect_paths || true)"
+  if [[ -z "$paths" ]]; then
+    return 0
+  fi
+  now="$(date +%s)"
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    format_row "$path" "$now"
+  done <<EOF
+$paths
+EOF
+}
+
+picker_header() {
+  local ver rev art meta hints
+  ver="$(cli_version)"
+  rev="$(cli_revision)"
+  art="$(
+    cat <<'ART'
+  ┌─┐─┐ ┬ ┌─┐┬  ┌─┐┬┌┐┌  ┌┬┐┬┌─┐┌─┐
+  ├┤ ┌┴┬┘ ├─┘│  ├─┤││││   │││├┤ ├┤
+  └─┘┴ └─ ┴  ┴─┘┴ ┴┴┘└┘  ─┴┘┴└  └
+ART
+  )"
+  meta="  v${ver}"
+  if [[ -n "$rev" ]]; then
+    meta="${meta}  ·  ${rev}"
+  fi
+  meta="${meta}  ·  ${REPO_ROOT}"
+  hints="  archive: ${ARCHIVE}   enter: open   ctrl-c: cancel"
+
+  if [[ "$USE_COLOR" -eq 1 ]]; then
+    printf '\033[38;5;110m%s\033[0m\n' "$art"
+    printf '\033[38;5;245m%s\033[0m\n' "$meta"
+    printf '\033[38;5;240m%s\033[0m' "$hints"
+  else
+    printf '%s\n%s\n%s' "$art" "$meta" "$hints"
+  fi
+}
+
+pick() {
+  local query="${1:-}"
+  local selected preview rows
+
+  if ! command -v fzf >/dev/null 2>&1; then
+    echo "fzf not found; install with: brew install fzf" >&2
+    exit 1
+  fi
+
+  rows="$(format_rows || true)"
+  if [[ -z "$rows" ]]; then
+    echo "No explain-diff HTML pages found." >&2
+    echo "Archive: $ARCHIVE" >&2
+    echo "Expected names like YYYY-MM-DD-explanation-<slug>.html" >&2
+    exit 1
+  fi
+
+  preview="$SCRIPT_DIR/explain-diff _preview {2}"
+
+  set -- \
+    --prompt='explain-diff> ' \
+    --height=80% \
+    --layout=reverse \
+    --border \
+    --ansi \
+    --header-first \
+    --delimiter=$'\t' \
+    --with-nth=1 \
+    --preview="$preview" \
+    --preview-window='right:50%:wrap' \
+    --header="$(picker_header)" \
+    --bind="ctrl-o:execute-silent(open 'http://${HOST}:${PORT}/p/'\$(basename '{2}')'?ask=1' || true)"
+  if [[ -n "$query" ]]; then
+    set -- "$@" --query="$query"
+  fi
+
+  selected="$(printf '%s\n' "$rows" | fzf "$@" || true)"
+  if [[ -z "${selected:-}" ]]; then
+    exit 130
+  fi
+  row_path "$selected"
+}
+
+cmd="${1:-open}"
+if [[ "$#" -gt 0 ]]; then
+  shift
+fi
+
+case "$cmd" in
+  help|-h|--help)
+    usage
+    ;;
+  version|-v|--version)
+    print_version
+    ;;
+  dir)
+    ensure_archive
+    echo "$ARCHIVE"
+    ;;
+  serve)
+    cmd_serve "$@"
+    ;;
+  ensure-deps)
+    cmd_ensure_deps
+    ;;
+  ensure-serve)
+    cmd_ensure_serve
+    ;;
+  list|ls)
+    if [[ -t 1 ]]; then
+      format_rows | while IFS= read -r line; do
+        printf '%s\n' "${line%%$'\t'*}"
+      done
+    else
+      collect_paths
+    fi
+    ;;
+  _preview)
+    preview_page "${1:-}"
+    ;;
+  path)
+    pick "${1:-}"
+    ;;
+  open)
+    ensure_ask_python >/dev/null || true
+    warn_ask_backends
+    selected="$(pick "${1:-}")"
+    open_page "$selected"
+    ;;
+  *)
+    ensure_ask_python >/dev/null || true
+    warn_ask_backends
+    selected="$(pick "$cmd${1:+ }$1")"
+    open_page "$selected"
+    ;;
+esac

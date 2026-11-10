@@ -1,0 +1,5 @@
+repo_url: git@ssh.bitbucket.org:ifs-pd/kairos-ai-skills.git
+branch: main
+commit_sha: 637106a2d738de42b993443b8f313fe0a447ad7e
+synced_at: '2026-11-10T03:31:55.031158+00:00'
+cli_version: 0.3.36

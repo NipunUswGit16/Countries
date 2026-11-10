@@ -1,0 +1,141 @@
+{{- if .Values.debezium.enabled }}
+{{- $dz := .Values.debezium }}
+{{- $component := $dz.componentName | default .Chart.Name }}
+{{- $platformNs := $dz.platformNamespace | default "kairos-kafka-connect" }}
+{{- $cluster := $dz.connectCluster | default "kairos-debezium" }}
+{{- $prefix := $dz.topicPrefix | default $component }}
+{{- $slotPart := regexReplaceAll "[^a-z0-9]" (lower $component) "_" }}
+{{- $pg := .Values.postgres }}
+{{- $db := $dz.database | default dict }}
+{{- $pgCluster := $pg.cluster | default dict }}
+{{- $pgNs := $pgCluster.namespace | default "cnpg-shared" }}
+{{/*
+Logical decoding needs a direct connection to the primary: PgBouncer cannot
+carry a replication connection, and slot.failover only takes effect against a
+PG17+ primary. So prefer the CNPG -rw service over postgres.service, which
+points at the pooler on Nexus. Falls back to postgres.service where no CNPG
+cluster is declared (local dev).
+*/}}
+{{- $dbHost := $db.hostname | default "" }}
+{{- if not $dbHost }}
+  {{- if $pgCluster.name }}
+    {{- $dbHost = printf "%s-rw.%s.svc.cluster.local" $pgCluster.name $pgNs }}
+  {{- else }}
+    {{- $dbHost = printf "%s.%s.svc.cluster.local" ($pg.service | required "postgres.service is required when debezium.database.hostname and postgres.cluster.name are unset") $pgNs }}
+  {{- end }}
+{{- end }}
+{{/* `default` would coerce an explicit false, so read the key directly. */}}
+{{- $slotFailover := true }}
+{{- if hasKey $dz "slotFailover" }}
+  {{- $slotFailover = $dz.slotFailover }}
+{{- end }}
+{{- $dbName := $db.dbname | default .Chart.Name }}
+{{- $dbPort := $db.port | default ($pg.port | default 5432) }}
+{{/* Strimzi kills a task on an unrecoverable error (e.g. replication-slot
+contention from a concurrent long-running tx) and never restarts it itself;
+autoRestart makes the operator retry the task restart with backoff instead of
+leaving it FAILED until someone runs a manual kubectl annotate. */}}
+{{- $autoRestart := $dz.autoRestart | default dict }}
+{{- $autoRestartEnabled := true }}
+{{- if hasKey $autoRestart "enabled" }}
+  {{- $autoRestartEnabled = $autoRestart.enabled }}
+{{- end }}
+{{/* Discover master-data entities (written by `make generate`). */}}
+{{- $entitiesRaw := .Files.Get "resources/masterdata-entities.json" }}
+{{- $entitiesDoc := dict }}
+{{- if $entitiesRaw }}
+  {{- $entitiesDoc = $entitiesRaw | fromJson }}
+{{- end }}
+{{- $entities := default (list) $entitiesDoc.entities }}
+{{- if eq (len $entities) 0 }}
+  {{- fail "debezium: no master-data entities in chart/resources/masterdata-entities.json. Run `make generate`." }}
+{{- end }}
+{{- $tableNames := list }}
+{{- range $entities }}{{- $tableNames = append $tableNames .tableName }}{{- end }}
+{{- $tableAlt := join "|" $tableNames }}
+{{/*
+Tenant schema selection (no tenant ids hardcoded by default):
+  - regex/auto (DEFAULT, debezium.tenants empty): match any UUID-named schema via
+    debezium.schemaIncludeRegex. New tenant schemas are captured on connector
+    (re)start; for zero-touch runtime capture set
+    debezium.publicationAutocreateMode: all_tables.
+  - explicit list (debezium.tenants set): capture exactly those schemas.
+table.include.list stays a table-name regex, bounded by schema.include.list.
+*/}}
+{{- $uuidRe := "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" }}
+{{- $tenants := $dz.tenants | default (list) }}
+{{- $schemaList := "" }}
+{{- if gt (len $tenants) 0 }}
+  {{- $schemaList = join "," $tenants }}
+{{- else }}
+  {{- $schemaList = $dz.schemaIncludeRegex | default $uuidRe }}
+{{- end }}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: {{ printf "%s-cdc" $component | quote }}
+  namespace: {{ $platformNs }}
+  labels:
+    strimzi.io/cluster: {{ $cluster | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    debezium.kairos.dev/component: {{ $component | quote }}
+    debezium.kairos.dev/source-namespace: {{ .Release.Namespace | quote }}
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  {{- if $autoRestartEnabled }}
+  autoRestart:
+    enabled: true
+    {{- with $autoRestart.maxRestarts }}
+    maxRestarts: {{ . }}
+    {{- end }}
+  {{- end }}
+  config:
+    # ── Connection (credentials from Secret/<component>-db in the platform ns;
+    #     rendered by templates/debezium/db-secret.yaml from postgres.* KV keys) ─
+    database.hostname: {{ $dbHost | quote }}
+    database.port: {{ $dbPort | quote }}
+    database.user: {{ printf "${secrets:%s/%s-db:user}" $platformNs $component | quote }}
+    database.password: {{ printf "${secrets:%s/%s-db:password}" $platformNs $component | quote }}
+    database.dbname: {{ $dbName | quote }}
+    # ── Logical decoding: ONE slot/publication for the whole component ──────────
+    plugin.name: pgoutput
+    slot.name: {{ printf "kairos_dbz_%s" $slotPart | quote }}
+    # A logical slot survives a primary failover only when created with this
+    # flag; the platform syncs slots to standbys but cannot set it for us.
+    # Ignored unless the target is a PG17+ primary, so it is safe everywhere.
+    slot.failover: {{ $slotFailover | quote }}
+    publication.name: {{ $dz.publicationName | default (printf "kairos_dbz_%s_pub" $slotPart) | quote }}
+    publication.autocreate.mode: {{ $dz.publicationAutocreateMode | default "filtered" | quote }}
+    topic.prefix: {{ $prefix | quote }}
+    # ── Scope: tenant schemas (regex by default — no tenant ids), MD tables only ─
+    schema.include.list: {{ $schemaList | quote }}
+    table.include.list: {{ printf ".*\\.(%s)" $tableAlt | quote }}
+    snapshot.mode: {{ $dz.snapshotMode | default "initial" | quote }}
+    # ── Emit plain JSON (no schema envelope on the wire) ────────────────────────
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: "false"
+    value.converter.schemas.enable: "false"
+    {{- $prefixRe := regexReplaceAll "[.]" $prefix "\\." }}
+    # ── In-connector transform: unwrap + Kairos MasterDataCdcTransform ─────────
+    # Topic: <component>.<entity>.<version>.<tenantId>
+    # Headers: ce_ifstenantid, ce_type, ce_source, ce_subject, ce_time (epoch ns)
+    # Value: parsed JSONB entity document. No ce_operation header.
+    transforms: unwrap,md
+
+    transforms.unwrap.type: io.debezium.transforms.ExtractNewRecordState
+    transforms.unwrap.add.fields: op,source.schema,source.table,ts_ms
+    transforms.unwrap.drop.tombstones: "true"
+
+    transforms.md.type: com.kairos.connect.transforms.MasterDataCdcTransform$Value
+    transforms.md.entities.json: {{ $entitiesRaw | quote }}
+    transforms.md.predicate: isData
+
+    predicates: isData
+    predicates.isData.type: org.apache.kafka.connect.transforms.predicates.TopicNameMatches
+    predicates.isData.pattern: {{ printf "%s\\..+" $prefixRe | quote }}
+{{- with $dz.extraConfig }}
+{{ toYaml . | indent 4 }}
+{{- end }}
+{{- end }}

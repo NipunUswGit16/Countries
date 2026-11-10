@@ -1,0 +1,12 @@
+{
+  "ownedTopics": [
+    "countries"
+  ],
+  "commandTargetComponents": [],
+  "inputTopics": [
+    "access-management"
+  ],
+  "referencedComponents": [
+    "access-management"
+  ]
+}

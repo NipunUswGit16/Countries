@@ -1,0 +1,14 @@
+{{/*
+Service: event-handler
+Helper: kairos.service
+Location: kairos-component-common/charts/kairos-components-common/templates/_service.tpl
+*/}}
+{{- $appConfig := include "bundle.getAppConfig" (dict "root" . "app" "event-handler") | fromYaml }}
+
+{{ include "kairos.service" (dict 
+  "name" "event-handler" 
+  "appLabel" "event-handler" 
+  "Values" $appConfig 
+  "Root" . 
+  "exposeHttp" false
+) }}

@@ -1,0 +1,13 @@
+{{/*
+Service: client-api
+Helper: kairos.service
+Location: kairos-component-common/charts/kairos-components-common/templates/_service.tpl
+*/}}
+{{- $appConfig := include "bundle.getAppConfig" (dict "root" . "app" "client-api") | fromYaml }}
+
+{{ include "kairos.service" (dict 
+  "name" "client-api" 
+  "appLabel" "client-api" 
+  "Values" $appConfig 
+  "Root" . 
+) }}

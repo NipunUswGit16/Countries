@@ -1,0 +1,29 @@
+{
+  "error": {
+    "client": {
+      "message": "Något gick fel i webbläsaren. Försök att ladda om sidan."
+    }
+  },
+  "home": {
+    "heading": {
+      "title": "Välkommen!"
+    },
+    "paragraph": {
+      "description": "Detta är startsidan för Kairos Template för din applikation."
+    }
+  },
+  "app": {
+    "menu": {
+      "home": "Hem",
+      "pages": "Sidor"
+    },
+    "profile": {
+      "signOut": "Logga ut",
+      "theme": "Tema",
+      "language": "Språk"
+    },
+    "toolbar": {
+      "notifications": "Aviseringar"
+    }
+  }
+}

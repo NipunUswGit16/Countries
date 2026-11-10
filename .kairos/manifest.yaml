@@ -1,0 +1,14 @@
+name: countries
+template:
+  repo: git@ssh.bitbucket.org:ifs-pd/kairos-component-template.git
+  sha: b52a99849b401f6c17e00ab0d67ceba01baebcb1
+  branch: main
+  kind: component
+frontend:
+  template: react
+  repo: git@ssh.bitbucket.org:ifs-pd/kairos-frontend.git
+  branch: main
+  sha: fdd54a3fa0df026276aae517f365a019fc1a4da6
+  path: template/react
+created_at: '2026-11-10T03:31:33Z'
+cli_version: 0.3.36

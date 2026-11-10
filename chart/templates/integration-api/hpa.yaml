@@ -1,0 +1,8 @@
+{{/*
+HPA: integration-api
+Helper: kairos.horizontalPodAutoscaler
+Location: kairos-component-common/charts/kairos-components-common/templates/_hpa.tpl
+Config: defaults.autoscaling.* (values.yaml)
+*/}}
+{{- $appConfig := include "bundle.getAppConfig" (dict "root" . "app" "integration-api") | fromYaml }}
+{{ include "kairos.horizontalPodAutoscaler" (dict "name" (printf "%s-integration-api" .Release.Namespace) "targetRef" (printf "%s-integration-api" .Release.Namespace) "Values" $appConfig "Root" .) }}

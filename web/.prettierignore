@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+**/dist/
+
+# Lock files
+pnpm-lock.yaml
+
+# TypeScript build info
+*.tsbuildinfo
+

@@ -1,0 +1,11 @@
+{{/*
+ServiceMonitor: integration-api
+Helper: kairos.serviceMonitor
+Location: kairos-component-common/charts/kairos-components-common/templates/_servicemonitor.tpl
+Config: defaults.serviceMonitor.* (values.yaml)
+Requires: Prometheus Operator CRD
+*/}}
+{{- $appConfig := include "bundle.getAppConfig" (dict "root" . "app" "integration-api") | fromYaml }}
+{{- if and (ne ((default dict $appConfig.serviceMonitor).enabled | toString) "false") (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+{{ include "kairos.serviceMonitor" (dict "name" (printf "%s-integration-api" .Release.Namespace) "appLabel" "integration-api" "port" "metrics" "Values" $appConfig "Capabilities" .Capabilities "Root" .) }}
+{{- end }}

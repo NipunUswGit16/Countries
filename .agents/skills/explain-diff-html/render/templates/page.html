@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="{{html_lang}}" data-theme="kanagawa" data-sidebar="open" style="--wrap-max: 1100px">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<script type="application/json" id="explain-diff-meta">{{meta_json}}</script>
+<script>
+/* BOOT_JS */
+</script>
+<style>
+/* PAGE_CSS */
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar" data-topbar>
+    <button type="button" class="tb-btn" data-sb-toggle aria-expanded="true"
+      aria-controls="sidebar" title="{{ui_sidebar_toggle}}">
+      <span aria-hidden="true">☰</span><span class="sr-only">{{ui_sidebar_toggle}}</span>
+    </button>
+    <span class="tb-title">{{title_html}}</span>
+    <div class="tb-spacer"></div>
+    <div class="tb-group">
+      <span class="tb-label" id="width-label">{{ui_width}}</span>
+      <input type="range" id="width-slider" class="width-slider"
+        min="720" max="1680" step="20" value="1100"
+        aria-labelledby="width-label" aria-label="{{ui_width_aria}}">
+      <span id="width-value" class="width-value" aria-live="polite">1100px</span>
+    </div>
+    <label class="tb-group" for="theme-picker">
+      <span class="tb-label">{{ui_theme}}</span>
+      <select id="theme-picker" class="theme-picker" aria-label="{{ui_theme_aria}}">
+        <option value="kanagawa">{{ui_theme_kanagawa}}</option>
+        <option value="dark">{{ui_theme_dark}}</option>
+        <option value="light">{{ui_theme_light}}</option>
+      </select>
+    </label>
+  </div>
+  <div class="shell">
+    <aside class="sidebar" id="sidebar" aria-label="{{ui_toc_aria}}">
+      <div class="sb-rail" aria-hidden="false">
+        <button type="button" class="sb-rail-btn" data-open-tab="toc" title="{{ui_contents}}">
+          <span aria-hidden="true">≡</span><span class="sr-only">{{ui_contents}}</span>
+        </button>
+        {{sidebar_rail_files}}
+      </div>
+      <div class="sb-inner">
+        <div class="sb-tabs" role="tablist">
+          <button type="button" role="tab" class="sb-tab is-on" data-tab="toc"
+            aria-selected="true">{{ui_contents}}</button>
+          {{sidebar_tab_files}}
+          <button type="button" class="sb-collapse" data-sb-toggle
+            title="{{ui_sidebar_collapse}}"><span aria-hidden="true">«</span><span class="sr-only">{{ui_sidebar_collapse}}</span></button>
+        </div>
+        <div class="sb-body">
+          <div class="sb-panel is-on" role="tabpanel" data-panel="toc">
+            <nav><ol class="toc-list">{{toc_html}}</ol></nav>
+          </div>
+          {{sidebar_panel_files}}
+        </div>
+      </div>
+    </aside>
+    <div class="main">
+      <header>
+        <h1>{{title_html}}</h1>
+        <p class="summary">{{summary_html}}</p>
+        <p class="meta">{{meta_html}}</p>
+      </header>
+      {{sections_html}}
+      <section id="quiz">
+        <h2>{{ui_quiz}}</h2>
+        <p>{{ui_quiz_intro}}</p>
+        <div id="quiz-root">{{quiz_html}}</div>
+      </section>
+      <footer><p>{{footer_html}}</p></footer>
+    </div>
+  </div>
+</div>
+<script>
+/* PAGE_JS */
+</script>
+
+<script>
+/* ASK_LOADER */
+</script>
+</body>
+</html>

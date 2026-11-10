@@ -1,0 +1,7 @@
+{{/*
+Component ConfigMap
+Helper: kairos.componentConfigMap
+Location: kairos-component-common/charts/kairos-components-common/templates/_configmap.tpl
+Config: postgres.*, kafka.*, defaults.auth.*, eventAdapter.*, outboxPublisher.*, eventRelay.*
+*/}}
+{{ include "kairos.componentConfigMap" . }}

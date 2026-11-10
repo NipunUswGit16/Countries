@@ -1,0 +1,61 @@
+apiVersion: v2
+name: bundle-countries
+version: 0.0.1
+description: Kairos countries component bundle
+
+dependencies:
+  - name: kairos-components-common
+    version: "0.6.0"
+    repository: "oci://nxsdvlglb01acr.azurecr.io/helm/kairos-components-common"
+
+annotations:
+
+  "ifs.com/deploymentDependencies": |
+     dockerImages:
+       - name: client-api-image
+         repository: "file://../cmd/client-api"
+         valuesToInject: |
+           client-api:
+             imageRepository: ${repository}
+             imageTag: ${tag}
+             imageDigest: ${digest}
+       - name: integration-api-image
+         repository: "file://../cmd/integration-api"
+         valuesToInject: |
+           integration-api:
+             imageRepository: ${repository}
+             imageTag: ${tag}
+             imageDigest: ${digest}
+       - name: event-handler-image
+         repository: "file://../cmd/event-handler"
+         valuesToInject: |
+           event-handler:
+             imageRepository: ${repository}
+             imageTag: ${tag}
+             imageDigest: ${digest}
+       - name: web-image
+         repository: "file://../web"
+         valuesToInject: |
+           web:
+             imageRepository: ${repository}
+             imageTag: ${tag}
+             imageDigest: ${digest}
+       - name: db-script-runner-image
+         repository: "file://../cmd/db-script-runner"
+         valuesToInject: |
+           db-script-runner:
+             imageRepository: ${repository}
+             imageTag: ${tag}
+             imageDigest: ${digest}
+       - name: dataloader-image
+         repository: "file://../cmd/dataloader"
+         valuesToInject: |
+           dataloader:
+             imageRepository: ${repository}
+             imageTag: ${tag}
+             imageDigest: ${digest}
+type: application
+
+maintainers:
+  - name: Next Gen Architecture, Rifki Razick
+    email: rifki.razick@ifs.com

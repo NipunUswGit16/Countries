@@ -1,0 +1,89 @@
+# static-web-server configuration for the Kairos component SPA.
+#
+# Replaces the previous nginx setup. Behaves the same way at the edge:
+#   - serves the built SPA from /public (read-only image filesystem)
+#   - mounts it under /issue-tracker
+#   - serves env.js (Helm-substituted at startup) from a writable /runtime mount
+#   - SPA fallback to index.html for client-side routes
+#   - long-lived caching for hashed build assets only; everything else revalidates
+#   - exposes GET/HEAD /health for the kubelet probes
+#
+# Reference: https://static-web-server.net/configuration/config-file/
+
+[general]
+host = "::"
+port = 8080
+root = "/public"
+log-level = "error"
+
+# Auto-negotiated compression (brotli, gzip, deflate, zstd).
+# Serves *.gz / *.br files alongside originals if the build produced them.
+compression = true
+compression-static = true
+
+# kubelet liveness/readiness hit GET /health (see charts/templates/web/deployment.yaml).
+health = true
+
+# SPA fallback: any 404 returns the built index.html so client-side routes work.
+page-fallback = "/public/index.html"
+
+# SWS's own Cache-Control (max-age by file extension, 1 day for the rest) is
+# off: the [[advanced.headers]] rules below are the only source of it.
+cache-control-headers = false
+
+# Don't redirect /<comp> -> /<comp>/ ; the ingress hostname can differ from
+# the request host and the absolute Location would break things (same reason
+# the old nginx config set `absolute_redirect off`).
+redirect-trailing-slash = false
+
+[advanced]
+
+# --- URL rewrites ---
+#
+# The ingress strips the /<namespace> prefix before requests reach SWS,
+# so all paths here are relative to the SPA root (no /<component>/ prefix).
+#
+# env.js is substituted at pod startup with Helm values and written to a
+# writable /runtime emptyDir mount. The internal virtual-host below exposes
+# that mount for SWS to serve.
+
+[[advanced.rewrites]]
+source = "/env.js"
+destination = "http://kairos-runtime/env.js"
+
+# --- Internal virtual-host backed by the writable /runtime mount ---
+# Only reachable via the rewrite above; the `kairos-runtime` hostname is
+# never resolvable from outside the pod.
+
+[[advanced.virtual-hosts]]
+host = "kairos-runtime"
+root = "/runtime"
+
+# --- Cache headers ---
+#
+# Every matching rule applies, in file order, and a later one replaces the
+# header of an earlier one. So the catch-all comes first and the exception last.
+#
+# Rules match the request path, except that for a file that was found SWS
+# (2.44, with redirect-trailing-slash = false) matches "<path>/<file name>"
+# instead, e.g. /assets/index-AbC123.js/index-AbC123.js. A path that fell back
+# to index.html (404 -> page-fallback) is matched as requested.
+
+# Default: revalidate. Covers index.html, env.js (rewritten above, and not
+# fingerprinted: it changes with the Helm values), favicon.png, and every SPA
+# route that falls back to index.html. The browser keeps a copy and asks again
+# each time (304 when unchanged).
+[[advanced.headers]]
+source = "**"
+[advanced.headers.headers]
+Cache-Control = "no-cache"
+
+# Hashed build assets (Vite writes assets/<name>-<hash>.<ext>): never change,
+# so long-lived and immutable. The pattern is the "<path>/<file name>" form
+# above, so only a file that exists matches. A missing /assets/... path, which
+# SWS answers with index.html, matches the default instead of getting 30 days.
+# A bundler that fingerprints elsewhere than assets/ needs its own rule.
+[[advanced.headers]]
+source = "**/assets/*-*.*/*-*.*"
+[advanced.headers.headers]
+Cache-Control = "public, max-age=2592000, immutable"

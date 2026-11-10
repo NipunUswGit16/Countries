@@ -1,0 +1,8 @@
+{{/*
+PDB: event-handler
+Helper: kairos.podDisruptionBudget
+Location: kairos-component-common/charts/kairos-components-common/templates/_pdb.tpl
+Config: defaults.podDisruptionBudget.* (values.yaml)
+*/}}
+{{- $appConfig := include "bundle.getAppConfig" (dict "root" . "app" "event-handler") | fromYaml }}
+{{- include "kairos.podDisruptionBudget" (dict "name" (printf "%s-event-handler" .Release.Namespace) "appLabel" "event-handler" "Values" $appConfig "Root" .) }}

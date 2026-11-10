@@ -1,0 +1,41 @@
+-- DEPRECATED. The publisher no longer reads or writes outbox_cursor. Event
+-- publication state is now tracked per-row via the sent_at column on
+-- event_outbox (see 1.04_event_outbox_sent_at_column.sql and
+-- 1.05_event_outbox_unpublished_index.sql).
+--
+-- DO NOT DELETE THIS FILE YET — the empty body is the mechanism, not a
+-- leftover. Components that provisioned under the cursor design already hold a
+-- copy of this file with an active CREATE TABLE. Shipping it empty is what
+-- overwrites their copy and stops the table being created. Deleting it here
+-- would leave those stale active copies in place, which is the opposite of
+-- the intended effect.
+--
+-- Deliberately left without a numeric prefix: it installs nothing, so it has
+-- no ordering constraints and is not part of the ordered 1.0x install set.
+--
+-- Provisioning of this table is now DISABLED: the CREATE TABLE / INSERT below
+-- are commented out so new tenants (and new components) are not given an
+-- outbox_cursor table they don't need. The column-based publisher discovers
+-- schemas by event_outbox alone, and BackfillSentAt is a no-op when the table
+-- is absent — so a brand-new tenant works correctly without it.
+--
+-- This is safe for tenants migrating from the cursor design too: they already
+-- have an outbox_cursor table (created by earlier provisioning), and disabling
+-- the CREATE here does not drop it. Their table stays in place so the one-time
+-- BackfillSentAt (run once per tenant at publisher startup) can still read
+-- outbox_cursor.lastProcessedId to mark already-published rows.
+--
+-- This file can be removed once BOTH hold: every tenant has run the one-time
+-- BackfillSentAt and soaked, AND every component has picked up this empty
+-- version (so there is no active copy left to overwrite). At that point also
+-- drop BackfillSentAt and, per tenant:
+--   DROP TABLE IF EXISTS <schema>.outbox_cursor;
+--
+-- CREATE TABLE IF NOT EXISTS outbox_cursor (
+--     id UUID NOT NULL PRIMARY KEY,
+--     data JSONB NOT NULL
+-- );
+--
+-- INSERT INTO outbox_cursor (id, data)
+-- VALUES ('00000000-0000-0000-0000-000000000001'::uuid, '{}'::jsonb)
+-- ON CONFLICT (id) DO NOTHING;

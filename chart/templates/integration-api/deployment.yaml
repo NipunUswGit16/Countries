@@ -1,0 +1,144 @@
+{{/*
+==============================================================================
+INTEGRATION API DEPLOYMENT TEMPLATE
+==============================================================================
+Common Helpers: _scheduling.tpl, _security.tpl, _image.tpl, _env.tpl, 
+                _probes.tpl, _volumes.tpl
+
+Config: defaults.* + integration-api.* (values.yaml)
+App Env: (none by default — add component-specific env vars below)
+================================================================================
+*/}}
+
+{{/* Load app-specific configuration with defaults */}}
+{{- $appConfig := include "bundle.getAppConfig" (dict "root" . "app" "integration-api") | fromYaml }}
+{{- $appLabel := "integration-api" }}
+{{/* Mount the bound SA token in its OWN directory — NOT under /var/run/secrets/kubernetes.io/serviceaccount,
+     which is where the default automount lives and would collide with a subPath file mount. */}}
+{{- $k8sTokenPath := $appConfig.k8sTokenPath | default "/var/run/secrets/tokens/token" }}
+{{- $k8sTokenDir := dir $k8sTokenPath }}
+{{- $k8sTokenFile := base $k8sTokenPath }}
+{{/* The cluster API server serves TLS with the cluster's own (non-public) CA. To fetch the
+     cluster JWKS for K8s token validation, the app must trust that CA — projected alongside
+     the token from the kube-root-ca.crt ConfigMap. Kept in the same dir as the token. */}}
+{{- $k8sCAPath := printf "%s/ca.crt" $k8sTokenDir }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-%s" .Release.Namespace $appLabel }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ $appLabel }}
+spec:
+  {{- if not (default dict $appConfig.autoscaling).enabled }}
+  replicas: {{ $appConfig.replicas | default 2 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ $appLabel }}
+  template:
+    metadata:
+      labels:
+        app: {{ $appLabel }}
+    spec:
+      {{/* Only the explicit projected token below is needed; no in-cluster client config is used. */}}
+      automountServiceAccountToken: false
+      {{- include "kairos.scheduling" (dict "appLabel" $appLabel "Values" $appConfig "Root" .) | nindent 6 }}
+      {{- include "kairos.podSecurityContext" (dict "runAsNonRoot" true) | nindent 6 }}
+
+      containers:
+        - name: {{ $appLabel }}
+          {{- include "kairos.image" (dict "Values" $appConfig "Root" . "appLabel" $appLabel) | nindent 10 }}
+
+          ports:
+            - containerPort: {{ $appConfig.port | default 8080 }}
+            - containerPort: {{ $appConfig.systemPort | default 9090 }}
+          
+          env:
+            {{/* 
+              AUTO-INJECTED BY LIBRARY:
+              - LOG_LEVEL, NAMESPACE, POD_NAME, IMAGE_VERSION, MEM_LIMIT
+              - JWKS_URL, TOKEN_ISSUER, TOKEN_AUDIENCE
+            */}}
+            {{- include "kairos.env.common" (dict "Values" $appConfig "Root" . "appLabel" $appLabel) | nindent 12 }}
+            
+            {{/* Infrastructure vars (Only injected if configured in values) */}}
+            {{- include "kairos.env.postgres" . | nindent 12 }}
+            {{- include "kairos.env.fiber" $appConfig | nindent 12 }}
+
+            - name: K8S_TOKEN_PATH
+              value: {{ $k8sTokenPath | quote }}
+            - name: K8S_CA_PATH
+              value: {{ $k8sCAPath | quote }}
+
+            {{/* Add the dataloader service account to the allowed service accounts,
+                 but only while the dataloader is enabled — otherwise the namespace
+                 default SA would be trusted by every component built from this template. */}}
+            {{- $dataloaderConfig := include "bundle.getAppConfig" (dict "root" . "app" "dataloader") | fromYaml }}
+            {{- $serviceAccounts := join "," ($appConfig.k8sAllowedServiceAccounts | default list) }}
+            {{- if ($dataloaderConfig).enabled }}
+              {{- $dataloaderSA := printf "%s:%s" .Release.Namespace ((($dataloaderConfig).serviceAccount).name | default "default") }}
+              {{- $serviceAccounts = ternary (printf "%s,%s" $serviceAccounts $dataloaderSA) $dataloaderSA (ne $serviceAccounts "") }}
+            {{- end }}
+            {{/* K8s service-account authentication for platform callers.
+                 Driven by the resulting allowlist (k8sAllowedServiceAccounts plus the
+                 dataloader SA): a non-empty allowlist enables validation and is passed
+                 through; an empty one disables it, because an empty allowlist would
+                 admit every pod in the cluster. */}}
+            - name: ENABLE_K8S_VALIDATION
+              value: {{ if $serviceAccounts }}"true"{{ else }}"false"{{ end }}
+            {{- if $serviceAccounts }}
+            - name: K8S_ALLOWED_SERVICE_ACCOUNTS
+              value: {{ $serviceAccounts | quote }}
+            {{- end }}
+
+            {{/* Integration API Specific Configuration */}}
+            - name: LOAD_BATCH_SIZE
+              value: {{ $appConfig.batchSize | default "100" | quote }}
+            - name: LOAD_MAX_PARALLEL_WORKERS
+              value: {{ $appConfig.maxParallelWorkers | default "5" | quote }}
+            - name: LOAD_MAX_ENTITIES_PER_REQUEST
+              value: {{ $appConfig.maxEntitiesPerRequest | default "1000" | quote }}
+            - name: LOAD_HANDLER_RESERVED_CONN_COUNT
+              value: {{ $appConfig.handlerReservedConnCount | default "-1" | quote }}
+            - name: LOAD_REQUEST_TIMEOUT
+              value: {{ $appConfig.requestTimeout | default "2m" | quote }}
+            - name: LOAD_ACQUIRE_TIMEOUT
+              value: {{ $appConfig.acquireTimeout | default "5s" | quote }}
+
+            {{/* App-specific env vars — add component-specific entries here. */}}
+
+          resources:
+            {{- toYaml $appConfig.resources | nindent 12 }}
+          
+          {{- include "kairos.livenessProbe" (dict "port" ($appConfig.systemPort | default 9090) "path" "/healthz") | nindent 10 }}
+          {{- include "kairos.readinessProbe" (dict "port" ($appConfig.systemPort | default 9090) "path" "/readyz") | nindent 10 }}
+          {{- include "kairos.containerSecurityContext" . | nindent 10 }}
+          
+          volumeMounts:
+            {{- include "kairos.volumeMounts" (dict "Root" .) | nindent 12 }}
+            {{/* Explicit SA token for K8s auth validation (K8S_TOKEN_PATH).
+                 Mount the whole projected dir (no subPath) so rotation via atomic
+                 symlink swap works and there's no collision with the default SA mount. */}}
+            - name: k8s-sa-token
+              mountPath: {{ $k8sTokenDir | quote }}
+              readOnly: true
+
+      volumes:
+        {{- include "kairos.volumes" (dict "Root" .) | nindent 8 }}
+        - name: k8s-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: {{ $k8sTokenFile | quote }}
+                  expirationSeconds: 3600
+              {{/* Cluster CA (same source the default automount uses) so the app can verify
+                   TLS to the API server's JWKS endpoint. */}}
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+
+

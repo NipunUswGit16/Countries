@@ -1,0 +1,14 @@
+{{/*
+Frontend (SPA) Ingress — exposes the web shell at /<namespace> (APISIX, regex).
+Uses frontend.ingress from kairos-components-common (_ingress.tpl).
+Defaults reserve /api, /auth, /client/api, and /client/auth. Pass "exclude"
+(list "jobs") to reserve additional namespace-relative prefixes.
+*/}}
+{{- $webConfig := include "bundle.getAppConfig" (dict "root" . "app" "web") | fromYaml }}
+
+{{ include "frontend.ingress" (dict
+  "name" (printf "%s-web" .Release.Namespace)
+  "appLabel" "web"
+  "Values" $webConfig
+  "Root" .
+) }}

@@ -1,0 +1,5 @@
+{{/*
+Ingress + Service: client-api auth-gateway edge.
+Uses kairos.authGatewayIngressAndService from kairos-components-common (_ingress.tpl).
+*/}}
+{{ include "kairos.authGatewayIngressAndService" (dict "root" . "app" "client-api" "subPath" "/client") }}

@@ -1,0 +1,568 @@
+# ==============================================================================
+# Kairos Component Values - Configuration Guide
+# ==============================================================================
+#
+# This file configures a Kairos component using the kairos-component-common library.
+# Common chart location: kairos-component-common/charts/kairos-components-common/templates/
+#
+# ==============================================================================
+# AVAILABLE HELM TEMPLATE HELPERS (from kairos-component-common)
+# ==============================================================================
+#
+# Deployments & Pods:
+#   kairos.scheduling              - Pod anti-affinity + topology spread (_scheduling.tpl)
+#   kairos.podSecurityContext      - Pod security settings (_security.tpl)
+#   kairos.containerSecurityContext - Container security settings (_security.tpl)
+#   kairos.image                   - Container image with registry/tag/digest (_image.tpl)
+#   kairos.livenessProbe           - HTTP liveness probe (_probes.tpl)
+#   kairos.readinessProbe          - HTTP readiness probe (_probes.tpl)
+#
+# Environment Variables (auto-injected):
+#   kairos.env.common              - LOG_LEVEL, NAMESPACE, POD_NAME, IMAGE_VERSION, MEM_LIMIT (_env.tpl)
+#                                  - TRACING_ENABLED, TRACING_EXPORTER, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT (_env.tpl)
+#                                  - JWKS_URL, TOKEN_ISSUER/TOKEN_ISSUERS, TOKEN_AUDIENCE (_env.tpl)
+#   kairos.env.postgres            - POSTGRES_URL_TEMPLATE, POSTGRES_CREDENTIALS_FILE_PATH, etc. (_env.tpl)
+#   kairos.env.fiber               - FIBER_READ_TIMEOUT, FIBER_WRITE_TIMEOUT, performance tuning (_env.tpl)
+#   kairos.env.web                 - API_BASE_PATH, AUTH_BASE_PATH, FULLSTORY_ORG_ID, FULLSTORY_DEV_MODE for web apps (_env.tpl)
+#
+# Volumes:
+#   kairos.volumeMounts            - App volumeMounts; postgres credentials when Values.postgres is set (_volumes.tpl)
+#   kairos.volumes                 - App volumes; postgres credentials when Values.postgres is set (_volumes.tpl)
+#
+# Services & Networking:
+#   kairos.service                 - Kubernetes Service; authGateway enabled → http targetPort 9082 (_service.tpl)
+#   kairos.eventHandlerNetworkPolicy - Ingress NP admitting systemPort only (_network-policy.tpl)
+#   kairos.authGatewayNetworkPolicy - Ingress NP admitting 9082 + systemPort (_network-policy.tpl)
+#   frontend.ingress               - User-facing Ingress (SPA; excludes /api /auth /client/api /client/auth; _ingress.tpl)
+#   kairos.authGatewayIngress      - Ingress /<namespace>/client/(auth|api…) → sidecar (_ingress.tpl)
+#   kairos.authGatewayIngressAndService - auth-gateway Ingress + NetworkPolicy (_ingress.tpl)
+#   kairos.authGatewayConfigMap    - auth-gateway-config env for Kyverno sidecar (_auth_gateway.tpl)
+#   kairos.serviceMonitor          - Prometheus ServiceMonitor CRD (_servicemonitor.tpl)
+#
+# Scaling & Resilience:
+#   kairos.horizontalPodAutoscaler - HPA with CPU/memory metrics (_hpa.tpl)
+#   kairos.podDisruptionBudget     - PDB for availability during disruptions (_pdb.tpl)
+#
+# Configuration Resources:
+#   kairos.componentConfigMap      - component-config: postgres/kafka + adapter/outbox/relay/tenantJobRunner (_configmap.tpl)
+#   kairos.eventRelayTopicConfig   - Event relay topic subscriptions (_event-relay.tpl)
+#   kairos.tenantJob               - TenantJobConfiguration for db-script-runner (_tenantjob.tpl)
+#   kairos.externalSecret.postgres - ExternalSecret for postgres credentials (_externalsecret.tpl)
+#   kairos.externalSecret.kafka    - ExternalSecret for kafka credentials (_externalsecret.tpl)
+#   kairos.externalSecret.authGatewayRedis - ExternalSecret for auth-gateway Redis (_externalsecret.tpl)
+#
+# ==============================================================================
+# CONFIGURATION STRUCTURE
+# ==============================================================================
+#
+# defaults:
+#   Settings inherited by all components (client-api, integration-api, event-handler, web)
+#   Override per-component by adding the same key under the component section
+#
+# postgres:
+#   Chart-wide DB settings. Helm injects them on client-api, integration-api,
+#   event-handler, and db-script-runner. The same keys go to component-config
+#   for the outbox publisher. Web, adapter, and relay do not use postgres.
+# kafka:
+#   Chart-wide broker settings. Written to component-config only; Kyverno
+#   injects adapter, outbox, and relay. App containers do not read Kafka env.
+#
+# client-api: / integration-api: / event-handler: / web:
+#   Component-specific overrides (imageRepository, resources, etc.)
+#
+# db-script-runner:
+#   TenantJobConfiguration settings (not a Deployment)
+#
+# ==============================================================================
+
+# SHARED DEFAULTS (Inherited by every component via getAppConfig merge)
+defaults:
+  logLevel: info
+  port: 8080
+
+  # Fiber split listener for /healthz, /readyz, /metrics (FIBER_SYSTEM_PORT).
+  # This value will not be used for the web app because it is handled by the static-web-server.
+  systemPort: 9090
+
+  imageRegistry: nxsdvlglb01acr.azurecr.io
+
+  # JWT Authentication — auto-injected into all backend components
+  # See: kairos.env.common in _env.tpl
+  auth:
+    jwksUrl: http://server.iam.svc.cluster.local:8080/keys
+    tokenIssuer: kairos-local-iam
+    # tokenIssuers: "issuer1,issuer2"  # Use this for multiple issuers instead of tokenIssuer
+
+  # Library-managed features
+  # See: _pdb.tpl, _hpa.tpl, _servicemonitor.tpl
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 3
+    # metrics default to CPU@70% + memory@80% in the library (_hpa.tpl)
+  serviceMonitor:
+    enabled: false
+    labels:
+      release: monitoring
+
+  # Fiber HTTP framework tuning
+  # See: kairos.env.fiber in _env.tpl
+  fiber:
+    readTimeout: "30s"
+    writeTimeout: "30s"
+    prefork: false
+    streamRequestBody: true
+    etag: true
+
+  # OpenTelemetry tracing for client-api / event-handler / web (TRACING_* env via _env.tpl)
+  # Integration tracing (adapter / outbox / relay) is toggled separately under eventAdapter / outboxPublisher / eventRelay in component-config
+  tracing:
+    enabled: false # Must be true (and exporter not disabled) for spans to export from API/EH
+    exporter: grpc  # disabled, grpc, stdout
+    endpoint: ""
+    disableTls: false
+
+
+# ==============================================================================
+# INFRASTRUCTURE (Chart-wide settings)
+# ==============================================================================
+
+# Hostnames for Ingress. Set in GitOps / values.dev.yaml.
+#   tenantHost — PAC / browser (web SPA + client-api auth-gateway).
+#   host       — non-tenant / platform; kairos.ingress (integration-api) adds
+#                this in addition to tenantHost when they differ.
+# null / omitted keys are skipped. If both are unset, helpers fall back to
+# local.pac.ifsdevworld.com.
+ingress:
+  host: null
+  tenantHost: null
+
+# PostgreSQL Configuration
+# Helm: kairos.env.postgres + volumes on API/EH Deployments and db-script-runner.
+# ConfigMap postgres.* → outbox. Not used by web, adapter, or relay.
+postgres:
+  service: postgres-service
+  port: 5432
+  connectionPoolSize: 10
+  connectTimeout: 30s
+  cluster:
+    namespace: cnpg-shared
+  secretName: postgres-credentials
+  # For ExternalSecrets integration (_externalsecret.tpl):
+  # usernameSecretName: "postgres-username-key"
+  # passwordSecretName: "postgres-password-key"
+  # secretStore: "default"
+
+# Kafka Configuration
+# Written to component-config (kafka.*). Kyverno injects adapter / outbox / relay
+# sidecars from those keys — app containers do not read Kafka env.
+kafka:
+  url: "redpanda-0.redpanda.local.pac.ifsdevworld.com:30092"
+  secretName: "kafka-config"
+  # saslMechanism: "SCRAM-SHA-512"
+  # disableTls: false
+  # produceRetries: 3
+  # deliveryTimeout: "30s"
+  # secretConfigFormat: yaml
+  # For ExternalSecrets integration (_externalsecret.tpl):
+  # secret:
+  #   usernameSecretName: "kafka-username"
+  #   passwordSecretName: "kafka-password"
+  #   storeName: "default"
+
+# ==============================================================================
+# APPLICATIONS (Component-specific overrides)
+# ==============================================================================
+
+# CLIENT API
+# See: templates/client-api/deployment.yaml
+client-api:
+  auth:
+    tokenAudience: "countries"
+  resources:
+    requests:
+      cpu: 200m
+      memory: 32Mi
+    limits:
+      cpu: 1000m
+      memory: 256Mi
+  # Override defaults here:
+  # imageRepository: nga/custom-repo
+  # imageTag: "1.0.0"
+  # replicas: 3
+  # autoscaling:
+  #   enabled: true
+
+  # Auth Gateway Sidecar (injected by Kyverno ClusterPolicy "inject-auth-gateway-sidecar")
+  # The client-api Deployment is always annotated for injection. You must supply:
+  #   1. An auth-gateway-config ConfigMap (this chart) → sidecar reads its config
+  #   2. kairos.authGatewayIngressAndService → Ingress + NetworkPolicy; kairos.service
+  #      points http at sidecar :9082. Paths: /<namespace>/client/(auth|api…)
+  # Image, port and resource limits are set in the auth-gateway-policy Helm chart values.
+  # Only fields rendered by kairos.authGatewayConfigMap (_auth_gateway.tpl) have effect.
+  #
+  # Default profile: multitenant (shared dev / GitOps). Local KinD uses
+  # chart/values.dev.yaml for deploymentType: single-tenant and in-memory sessions.
+  authGateway:
+    enabled: true
+    deploymentType: multitenant
+    applicationId: countries
+    # Optional — kairos.authGatewayConfigMap supplies defaults when omitted (_auth_gateway.tpl).
+    #proxyRoutes: /api->http://127.0.0.1:8080
+    #bypassHeaders: Authorization
+    sessionStorageType: redis
+    #oauthScopes: "openid profile email"
+    #readHeaderTimeout: 10s
+    #shutdownTimeout: 30s
+    #keyvaultUrl: "https://dummy.vault.azure.net/"
+    oauth:
+      clientId: ""
+      clientSecret: ""
+      authUrl: ""
+      tokenUrl: ""
+      logoutUrl: ""
+      redirectUrl: ""
+    redis:
+      secretName: "auth-gateway-redis-secret"
+      connectionString: ""
+      # For ExternalSecrets integration (_externalsecret.tpl):
+      # passwordSecretName: "auth-gateway-redis-password"  # Key Vault secret name
+      # secretStore: "default"
+      # host: "auth-gateway-redis"  # Override only for managed Redis (e.g. Azure Cache)
+      # port: "6379"
+
+# === INTEGRATION API
+# See: templates/integration-api/deployment.yaml
+integration-api:
+  auth:
+    tokenAudience: "countries-integration"
+  # Batch processing configuration
+  batchSize: 100
+  maxParallelWorkers: 10
+  maxEntitiesPerRequest: 1000
+  handlerReservedConnCount: -1
+  # K8s service-account authentication for platform callers.
+  # Setting a non-empty allowlist enables validation and passes the accounts through;
+  # leaving it unset disables k8s auth (an empty allowlist would admit every pod).
+  # Format is "namespace:serviceaccount".
+  # Note: while dataloader.enabled is true, the dataloader's service account
+  # (currently the namespace default SA — no dedicated SA exists yet) is
+  # appended automatically. Validation only turns on once the resulting
+  # allowlist is non-empty, so with the dataloader disabled this empty list
+  # keeps k8s auth off.
+  k8sAllowedServiceAccounts: []
+  k8sTokenPath: /var/run/secrets/tokens/token
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  # Override defaults here:
+  # imageRepository: nga/custom-repo
+  # imageTag: "1.0.0"
+  # replicas: 3
+  # autoscaling:
+  #   enabled: true
+
+# WEB APP
+# See: templates/web/deployment.yaml, kairos.env.web in _env.tpl
+web:
+  # Fullstory (FULLSTORY_ORG_ID / FULLSTORY_DEV_MODE). Empty org id disables it.
+  # fullstoryOrgId: ""
+  # fullstoryDevMode: "false"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 8Mi
+    limits:
+      cpu: 300m
+      memory: 64Mi
+
+# EVENT HANDLER
+# See: templates/event-handler/deployment.yaml
+event-handler:
+  # Ingress NetworkPolicy (kairos.eventHandlerNetworkPolicy) admits only
+  # systemPort so the HTTP API is not reachable from other pods. The
+  # event-adapter sidecar uses loopback, which NetworkPolicy does not
+  # filter. Combined mode or a CNI probe quirk: opt out with
+  # networkPolicy.enabled: false (missing key = on).
+  # networkPolicy:
+  #   enabled: false
+  resources:
+    requests:
+      cpu: 200m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+# ==============================================================================
+# DB SCRIPT RUNNER (TenantJobConfiguration CRD)
+# ==============================================================================
+# See: kairos.tenantJob in _tenantjob.tpl
+# Not a Deployment — runs as a Kubernetes Job per tenant via operator
+db-script-runner:
+  enabled: true
+  # logLevel: error  # omit → error. Modes: debug, info, warn, error
+  backoffLimit: 5
+  maxRetries: 5
+  retryDelayMillis: 2000
+
+  # Tenant targeting (choose one):
+  # Replace with your actual capability.
+  tenantCapability: "kairos.onboarding"  # Run only for tenants with this capability
+  # conditions:          # Or use CEL expressions for complex logic
+  #   - '"capability-1" in capabilities && capabilities["capability-1"].suspended'
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 64Mi
+      ephemeral-storage: 512Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+      ephemeral-storage: 256Mi
+
+# ==============================================================================
+# COMPONENT-CONFIG / KYVERNO (override examples — omit = platform defaults)
+# ==============================================================================
+# See: kairos.componentConfigMap in _configmap.tpl
+#
+# Omitting a block does not disable it. The ConfigMap still emits
+# eventAdapter.enabled / outboxPublisher.enabled / eventRelay.enabled as "true".
+# Set enabled: false to opt out. Tracing is independent of defaults.tracing.
+#
+# Event Adapter - Kafka → event-handler sidecar
+# eventAdapter:
+#   enabled: true          # default when omitted; set false to opt out
+#   tracing:
+#     enabled: false  # Optional; independent of defaults.tracing.enabled
+#     # If omitted: Falls back to platform chart's tracing.enabled (from nga-local-dev cluster.values.yaml in local dev)
+#     # Local dev default: true (cluster.values.yaml), Nexus: varies by environment
+#     # Set explicitly to false to opt out of tracing for this component's adapter sidecar
+#   # Sidecar resource envelope. Values are written into component-config as
+#   # "eventAdapter.resources.*" and read by the event-adapter Kyverno policy at injection /
+#   # image-update / config-edit time. Any omitted key falls back to defaults.resources.* and
+#   # then to the built-in default shown below.
+#   resources:
+#     limits:
+#       cpu: 500m
+#       memory: 128Mi
+#       ephemeral-storage: 1Gi
+#     requests:
+#       cpu: 100m
+#       memory: 128Mi
+#       ephemeral-storage: 200Mi
+
+# Outbox Publisher - outbox table → Kafka (nga-event-outbox). Kyverno creates
+# event-outbox-publisher when enabled and type=postgres.
+# outboxPublisher:
+#   enabled: true          # default when omitted; set false to opt out
+#   type: postgres
+#   tracing:
+#     enabled: false
+#   replicaCount: 2
+#   # Optional overrides (event-outbox reads these from component-config when set):
+#   logLevel: "info"
+#   postgres:
+#     pollInterval: "1s"
+#     batchSize: "100"
+#     schemaPattern: ".*"
+#     schemaRefreshInterval: "5m"
+#     schemaNotifyChannel: "schema_changes"
+#     enableParallelProcessing: true
+#     maxConcurrentSchemas: "0"
+#     maxRetries: "3"
+#     retryBackoff: "1s"
+#   kafka:
+#     dialTimeout: "10s"
+#     deliveryTimeout: "10s"
+#   # kafka.allowAutoTopicCreation: false      # set in kafka section if needed
+#   # Publisher resource envelope. Values are written into component-config as
+#   # "outboxPublisher.resources.*" (cpu + memory only) and read by the event-outbox Kyverno
+#   # policy. Any omitted key falls back to defaults.resources.* and then to the built-in
+#   # default shown below.
+#   resources:
+#     limits:
+#       cpu: "2"
+#       memory: 512Mi
+#     requests:
+#       cpu: 250m
+#       memory: 512Mi
+
+# Event Relay - relays events between topics
+# See: kairos.eventRelayTopicConfig in _event-relay.tpl
+# eventRelay:
+#   enabled: true          # default when omitted; set false to opt out
+#   topicConfigMapName: event-relay-topics
+#   tracing:
+#     enabled: false  # Optional; independent of defaults.tracing.enabled
+#     # If omitted: Falls back to platform chart's tracing.enabled
+#     # Set explicitly to false to opt out of tracing for event relay
+#   # Relay resource envelope. Values are written into component-config as
+#   # "eventRelay.resources.*" and read by the event-relay Kyverno policy. Any omitted key
+#   # falls back to defaults.resources.* and then to the built-in default shown below.
+#   resources:
+#     limits:
+#       cpu: 1000m
+#       memory: 200Mi
+#       ephemeral-storage: 1Gi
+#     requests:
+#       cpu: 100m
+#       memory: 200Mi
+#       ephemeral-storage: 200Mi
+
+# ==============================================================================
+# MASTER-DATA CDC — Debezium only (no downstream consumer)
+# ==============================================================================
+# Requires cluster platform: kairos-kafka-connect (`make install` once per cluster).
+# Define master-data entities in pkg/schema/masterdata, then `make generate`.
+# See chart/README.md — Master-data CDC.
+debezium:
+  enabled: false
+  componentName: countries
+  platformNamespace: kairos-kafka-connect
+  connectCluster: kairos-debezium
+  topicPrefix: countries
+  snapshotMode: initial
+  tenants: []
+  schemaIncludeRegex: "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+  # A PG17 logical slot is dropped on failover unless created with this flag,
+  # and only the party creating the slot can set it. Debezium ignores it when
+  # the target is not a PG17+ primary, so it is safe to leave on.
+  slotFailover: true
+  # Empty = the connector creates and owns kairos_dbz_<component>_pub, which is
+  # the local-dev path. On Nexus the CNPG chart declares an all-tables
+  # publication so new tenant schemas are captured without a connector restart;
+  # set this to that name and publicationAutocreateMode to disabled.
+  publicationName: ""
+  # filtered = new tenant schemas picked up on connector (re)start;
+  # all_tables = zero-touch runtime capture (more WAL; needs FOR ALL TABLES priv);
+  # disabled = publication is managed externally.
+  publicationAutocreateMode: filtered
+  # Strimzi kills a task on an unrecoverable error (e.g. replication-slot
+  # contention from a concurrent long-running tx elsewhere on the shared
+  # Postgres cluster) and never restarts it itself. autoRestart makes the
+  # operator retry the task restart with backoff instead of leaving it FAILED
+  # until someone runs a manual kubectl annotate.
+  autoRestart:
+    enabled: true
+  # Hostname defaults to the CNPG primary <postgres.cluster.name>-rw when a
+  # cluster is declared, else <postgres.service>. Logical decoding must reach the
+  # primary directly — the pooler cannot carry a replication connection.
+  database:
+    hostname: ""
+    port: 5432
+    dbname: countries
+  # Syncs Secret/<component>-db into platformNamespace from the same Key Vault
+  # keys as postgres.usernameSecretName / passwordSecretName. The connector
+  # authenticates as the app role, which therefore needs the replication
+  # attribute and pg_read_all_data on the CNPG cluster.
+  # Local k3d: set enabled: false — there is no KV; Kyverno
+  # generate-debezium-db-secret creates the same Secret shape.
+  dbSecret:
+    enabled: true
+    storeName: default
+    decodingStrategy: None
+    refreshInterval: 15m
+  extraConfig: {}
+
+# Tenant Job Runner — Kyverno-sized runner that executes TenantJobConfiguration
+# CRs (including db-script-runner). Not the same as db-script-runner.enabled.
+# There is no tenantJobRunner.enabled; only replicaCount and resources.
+# tenantJobRunner:
+#   replicaCount: 2
+#   resources:
+#     limits:
+#       cpu: 100m
+#       memory: 128Mi
+#       ephemeral-storage: 512Mi
+#     requests:
+#       cpu: 50m
+#       memory: 64Mi
+#       ephemeral-storage: 256Mi
+
+# ==============================================================================
+# DATALOADER (TenantJobConfiguration CRD)
+# ==============================================================================
+# See: kairos.dataloaderJob in _dataloaderjob.tpl
+# Not a Deployment — runs as a Kubernetes Job per tenant via operator
+# Entities config: dataloader/external-entities.json (baked into image)
+dataloader:
+  enabled: true
+  backoffLimit: 3
+  logLevel: debug
+  imageRepository: nga/countries-dataloader
+  imageTag: 0.0.1
+  imageDigest: null
+  imagePullPolicy: Always
+  triggerCommandSendWorkerPoolSize: 4
+  auth:
+    tokenAudience: "countries-integration"   # must match integration-api.auth.tokenAudience (recipient of the ingest token)
+
+  # Tenant targeting (choose one). Must be a subset of db-script-runner's
+  # targeting (tenantCapability: "kairos.onboarding" above), otherwise the
+  # dataloader waits forever for those tenants.
+  tenantCapability: "kairos.onboarding"
+  # conditions:
+  #   - "true"
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+      ephemeral-storage: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+      ephemeral-storage: 256Mi
+
+  # Data lake settings for reference-aggregate polling. Delivered via the job
+  # TenantJobConfiguration configuration block (config.json), not env vars.
+  # baseUrl/basePath are environment-specific — set them per environment
+  # (see values.dev.yaml). Omit a key to use the dataloader's built-in default.
+  #
+  # Auth: in-cluster the job presents a projected service-account token,
+  # mounted at /var/run/secrets/datalake/token. Leave bearerToken empty for
+  # that; set it only for local runs against a fake lake.
+  datalake:
+    tokenAudience: "authz-facade"
+    runIdScopedPath: true
+    baseUrl: "http://host.k3d.internal:9082"
+    basePath: "cloud_fss"
+    pollInterval: 3s
+    pollTimeout: 1m
+    # Max age of a complete export (now - status.json createdAt). Off when
+    # omitted or 0. Enable only once producers write createdAt. Must exceed pollInterval.
+    freshnessBuffer: 1h
+    httpTimeout: 5m
+    bearerToken: ""
+    downloadWorkers: 8
+    # Ingestion size guards. Omit a key to keep the dataloader default
+    # (8388608 / 4194304 / 1000). ingestMaxBytes bounds one chunk (the POST
+    # body) and must be greater than ingestMaxRecordBytes.
+    ingestMaxBytes: 8388608
+    ingestMaxRecordBytes: 4194304
+    ingestChunkMaxRecords: 1000
+
+  # Integration API settings for the poller's ingestion sender. Delivered via
+  # the job TenantJobConfiguration configuration block (config.json), not env vars.
+  # baseUrl is environment-specific — set it per environment (see values.dev.yaml).
+  # Omit a key to use the dataloader's built-in default. Leave bearerToken unset
+  # in-cluster to authenticate with the pod service account token.
+  integrationApi:
+    # In-cluster URL: the dataloader Job reaches the integration-api ClusterIP
+    # Service by name in the same namespace. The client POSTs to
+    # {baseUrl}/api/core/v1/load.
+    baseUrl: "http://integration-api:8080"
+    # bearerToken: left unset so in-cluster runs use the pod service account token
+    # httpTimeout: 60s
+    retryMaxAttempts: 5
+    retryBaseDelay: 200ms

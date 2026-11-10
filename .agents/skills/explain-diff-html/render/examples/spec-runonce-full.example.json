@@ -1,0 +1,123 @@
+{
+  "title": "Issue [3]: runOnce: false Reruns Without Prereq Dedupe",
+  "repo_root": "/Users/cesar/Projects/kairos-tenant-job-runner",
+  "editor_scheme": "cursor",
+  "summary": "A dependent config with runOnce: false can spawn duplicate jobs on every idle reconcile after its own job is Finished, because shouldCreateJob treats rerun as a static flag check — not as \"prereq completed again since last run.\"",
+  "meta": "Source: reviewV2-bugs.md MAJOR [3] · Open bug (no fix in tree at analysis time) · kairos-tenant-job-runner",
+  "footer": "Generated 2026-07-15. Inspected: reviewV2-bugs.md [3], manager.go (shouldCreateJob, preconditionsAllowCreation), preconditions.go, jobstatus_controller.go (triggerDependentConfigs), api/v1/tenantjobconfiguration.go, preconditions_test.go, manager/preconditions_test.go, integration manifests 56 and scenario 52. Assumption: no fix committed yet.",
+  "sections": [
+    {
+      "id": "background",
+      "title": "Background",
+      "blocks": [
+        {"type": "html", "content": "<h3>Mental model</h3><p><code>jobPreconditions</code> order work: config <strong>deploy</strong> waits until config <strong>build</strong> has a finished normal job. Each entry in the list can set <code>runOnce</code>:</p>"},
+        {"type": "table", "headers": ["<code>runOnce</code>", "Documented intent"], "rows": [["<code>true</code> (default)", "Dependent runs once per job version when prereq completes; no rerun when prereq finishes again for the same version"], ["<code>false</code>", "Each new successful prereq completion may create another dependent job"]], "caption": "From api/v1/tenantjobconfiguration.go JobPrecondition.RunOnce comment."},
+        {"type": "html", "content": "<p>Two mechanisms can wake the dependent config:</p>"},
+        {"type": "cards", "columns": 2, "cards": [
+          {"title": "Event-driven", "content": "<p><code>JobStatusReconciler.triggerDependentConfigs</code> enqueues dependents when a prereq K8s job reaches <code>Finished</code>.</p>"},
+          {"title": "Periodic", "content": "<p>Manager <code>Reconcile</code> runs on a work queue timer / resync for every tenant+config.</p>"}
+        ]},
+        {"type": "html", "content": "<h3>Dedupe for \"already ran this version\"</h3><p><code>GetMatchingJob</code> finds the newest row for the same <code>config_name</code>, <code>template_name</code>, <code>template_generation</code>, <code>config_hash</code>, and <code>is_deleting</code>. If that row is <code>Finished</code>, <code>shouldCreateJob</code> normally returns <code>false</code> — unless a rerun policy says otherwise.</p>"},
+        {"type": "callout", "title": "Existing rerun policies", "content": "<code>OnUpdate.RerunFinished</code> / <code>OnJobTemplateUpdate.RerunFinished</code> (config-level), and <code>runOnce: false</code> (precondition-level via <code>AllowsRerunWhenFinished</code>)."}
+      ]
+    },
+    {
+      "id": "intuition",
+      "title": "Intuition",
+      "blocks": [
+        {"type": "html", "content": "<h3>Toy scenario</h3><p>Prereq <code>build</code> and dependent <code>deploy</code>. Dependent has <code>runOnce: false</code> on the prereq entry. Both have stable <code>jobVersion</code> / config hash.</p><ol><li>Build finishes → deploy creates job #1 → deploy finishes.</li><li>Periodic reconcile runs again (no new build completion).</li></ol>"},
+        {"type": "panels", "panels": [
+          {"variant": "intended", "title": "Intended", "content": "<p>No new deploy job. Prereq did not complete again.</p>"},
+          {"variant": "actual", "title": "Actual (bug)", "content": "<p><code>shouldCreateJob</code> returns <code>true</code> → deploy job #2, #3, … on subsequent reconciles while the latest matching row stays <code>Finished</code>.</p>"}
+        ]},
+        {"type": "html", "content": "<h3>Why it happens</h3><p>The gate is only:</p>"},
+        {"type": "code", "language": "go", "file": "internal/jobs/manager/manager.go", "line": 848, "code": "if rerunFinished || preconditions.AllowsRerunWhenFinished(jobPreconditions) {\n    return true, \"rerunning finished job per rerunFinished policy\"\n}"},
+        {"type": "html", "content": "<p><code>AllowsRerunWhenFinished</code> scans config: \"does any entry have <code>runOnce: false</code>?\" It does <em>not</em> compare the prereq's latest job <code>id</code> or <code>finished_at</code> against what already triggered a dependent rerun.</p>"},
+        {"type": "callout", "variant": "warn", "title": "Misleading log reason", "content": "The reason string says <code>rerunFinished policy</code> even when the trigger was <code>runOnce: false</code> on a precondition — same branch, shared message."},
+        {"type": "html", "content": "<h3>When the intended path works</h3><p>Integration scenario 52 bumps prereq <code>jobVersion</code> v1→v2. That creates a <em>second</em> prereq job; when it finishes, <code>triggerDependentConfigs</code> enqueues deploy and a second deploy job is expected. The test asserts job counts after that explicit bump — not after idle resyncs.</p>"},
+        {"type": "flow", "steps": [
+          {"label": "Reconcile", "sub": "deploy"},
+          {"label": "GetMatchingJob", "sub": "Finished"},
+          {"label": "shouldCreateJob", "sub": "true"},
+          {"label": "New deploy job", "sub": "duplicate"}
+        ], "arrows": ["preconds OK", "runOnce false", "INSERT"], "caption": "Bug reconcile loop when periodic resync runs after deploy already Finished."}
+      ]
+    },
+    {
+      "id": "code",
+      "title": "Code",
+      "blocks": [
+        {"type": "html", "content": "<h3>1. API contract — runOnce</h3><p><code>api/v1/tenantjobconfiguration.go</code> (~lines 96–101)</p>"},
+        {"type": "code", "language": "go", "file": "api/v1/tenantjobconfiguration.go", "line": 96, "end_line": 101, "code": "// RunOnce when true (default) prevents re-triggering ...\n// When false, each successful prerequisite completion may create a new job."},
+        {"type": "html", "content": "<h3>2. Static flag check — AllowsRerunWhenFinished</h3><p><code>internal/jobs/preconditions/preconditions.go</code> (~lines 113–119)</p>"},
+        {"type": "code", "language": "go", "file": "internal/jobs/preconditions/preconditions.go", "line": 113, "end_line": 119, "code": "func AllowsRerunWhenFinished(preconditions []apiv1.JobPrecondition) bool {\n    for _, precondition := range preconditions {\n        if !precondition.RunOnceOrDefault() {\n            return true\n        }\n    }\n    return false\n}"},
+        {"type": "html", "content": "<p>No repository call; no memory of last triggering prereq job.</p><h3>3. Rerun branch — shouldCreateJob</h3><p><code>internal/jobs/manager/manager.go</code> (~lines 832–856)</p>"},
+        {"type": "code", "language": "go", "file": "internal/jobs/manager/manager.go", "line": 832, "end_line": 856, "code": "if matchingJob.Status == jobs.JobStatusFinished {\n    rerunFinished := config.Spec.OnUpdate.RerunFinished\n    if !isInlineSpec {\n        rerunFinished = rerunFinished || config.Spec.OnJobTemplateUpdate.RerunFinished\n    }\n    if rerunFinished || preconditions.AllowsRerunWhenFinished(jobPreconditions) {\n        return true, \"rerunning finished job per rerunFinished policy\"\n    }\n    return false, \"\"\n}"},
+        {"type": "html", "content": "<p>Called from <code>createJobIfNeeded</code> after <code>preconditionsAllowCreation</code> already returned true (prereq <code>Finished</code> → Satisfied).</p><h3>4. Event path — triggerDependentConfigs</h3><p><code>internal/controller/jobstatus_controller.go</code> (~lines 487–518)</p><p>On prereq <code>Finished</code>, lists all configs in namespace and enqueues any that <code>ReferencesConfig</code> the completed config. Does not check <code>runOnce</code> here — gating happens later in <code>shouldCreateJob</code>.</p><p>For <code>runOnce: true</code>, event enqueue + <code>shouldCreateJob</code> → <code>false</code> when matching job already <code>Finished</code>. Correct.</p><p>For <code>runOnce: false</code>, event path is correct; periodic path is the leak.</p><h3>5. Tests today</h3>"},
+        {"type": "table", "headers": ["Test", "What it proves", "Gap"], "rows": [
+          ["TestJobManagerShouldCreateJobPreconditionRerun", "runOnce: false + matching Finished → needs new job", "Encodes the buggy predicate, not dedupe"],
+          ["Scenario 52 integration", "Second deploy job after prereq jobVersion bump", "No assertion after idle reconciles"]
+        ]},
+        {"type": "html", "content": "<h3>6. Suggested fix directions (review)</h3><ul><li><strong>Persist trigger cursor:</strong> store last prereq job <code>id</code> (or <code>finished_at</code>) that caused a dependent rerun; in <code>shouldCreateJob</code>, only rerun if prereq's latest finished job is newer.</li><li><strong>Document as intentional:</strong> if product accepts rerun-on-every-reconcile, fix API text and reason string (unlikely given field semantics).</li><li><strong>Separate reason strings</strong> for <code>RerunFinished</code> vs precondition rerun.</li></ul>"},
+        {"type": "callout", "variant": "danger", "title": "Status", "content": "This is an open MAJOR per review V2. No dedupe implementation was found in the codebase at analysis time."}
+      ]
+    }
+  ],
+  "quiz": [
+    {
+      "question": "According to the API comment, when should runOnce: false create another dependent job?",
+      "explain": "The field documents event-based rerun per prereq completion, not periodic reconcile.",
+      "distractors": "Every reconcile is the bug. Hash change is a separate generation path. runOnce false enables rerun, not blocking.",
+      "options": [
+        {"text": "On every manager reconcile while the dependent job is Finished", "correct": false},
+        {"text": "Only when the prerequisite completes successfully again", "correct": true},
+        {"text": "Only when the dependent config hash changes", "correct": false},
+        {"text": "Never; runOnce false disables all deduplication", "correct": false}
+      ]
+    },
+    {
+      "question": "What does AllowsRerunWhenFinished actually check?",
+      "explain": "It is a static scan of the precondition list — no DB comparison.",
+      "distractors": "Prereq timing and Satisfied state are handled elsewhere. RerunFinished is a separate OR branch in shouldCreateJob.",
+      "options": [
+        {"text": "Whether the prerequisite job finished since the last dependent run", "correct": false},
+        {"text": "Whether OnUpdate.RerunFinished is true on the dependent config", "correct": false},
+        {"text": "Whether all prerequisites are in Finished status right now", "correct": false},
+        {"text": "Whether any jobPrecondition entry has runOnce set to false", "correct": true}
+      ]
+    },
+    {
+      "question": "Dependent deploy is Finished (same version). Prereq has not run again. runOnce: false. Next idle reconcile — shouldCreateJob?",
+      "explain": "matchingJob Finished + AllowsRerunWhenFinished true → create again. preconditionsAllowCreation still passes because prereq remains Finished.",
+      "distractors": "The intended false outcome is not implemented. Preconditions gate unsatisfied/waiting, not this dedupe gap.",
+      "options": [
+        {"text": "Returns true; may insert another deploy job (bug)", "correct": true},
+        {"text": "Returns false; no matching rerun signal", "correct": false},
+        {"text": "Returns false; preconditionsAllowCreation blocks first", "correct": false},
+        {"text": "Panics because runOnce false is invalid with Finished jobs", "correct": false}
+      ]
+    },
+    {
+      "question": "When does triggerDependentConfigs enqueue dependent configs?",
+      "explain": "JobStatusReconciler calls it after terminal update to Finished; it lists configs referencing the completed config name.",
+      "distractors": "runOnce is not checked in the controller; shouldCreateJob applies it later. Matching job nil is the first-create path, not this trigger.",
+      "options": [
+        {"text": "When any config in the namespace is reconciled", "correct": false},
+        {"text": "When a prerequisite K8s job reaches Finished status", "correct": true},
+        {"text": "Only when runOnce is false on the dependent entry", "correct": false},
+        {"text": "Only when the dependent matching job is nil", "correct": false}
+      ]
+    },
+    {
+      "question": "Why can integration scenario 52 pass while MAJOR [3] remains valid?",
+      "explain": "Scenario 52 validates the happy event path (prereq runs twice → deploy runs twice). It does not wait for periodic reconciles without a new prereq completion.",
+      "distractors": "No prereq id dedupe exists. AllowsRerunWhenFinished is still in preconditions.go.",
+      "options": [
+        {"text": "shouldCreateJob dedupes by prereq job id internally", "correct": false},
+        {"text": "The test drives a second prereq run via jobVersion bump and does not check idle resync spam", "correct": true},
+        {"text": "runOnce false is ignored in production builds", "correct": false},
+        {"text": "AllowsRerunWhenFinished was removed after the test was written", "correct": false}
+      ]
+    }
+  ]
+}
