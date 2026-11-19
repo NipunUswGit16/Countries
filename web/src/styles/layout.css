@@ -1,0 +1,3 @@
+.page-container {
+  padding: var(--space-layout-padding-3xl) var(--space-layout-padding-4xl) var(--space-layout-padding-lg);
+}

@@ -1,0 +1,8 @@
+{{/*
+PDB: integration-api
+Helper: kairos.podDisruptionBudget
+Location: kairos-component-common/charts/kairos-components-common/templates/_pdb.tpl
+Config: defaults.podDisruptionBudget.* (values.yaml)
+*/}}
+{{- $appConfig := include "bundle.getAppConfig" (dict "root" . "app" "integration-api") | fromYaml }}
+{{- include "kairos.podDisruptionBudget" (dict "name" (printf "%s-integration-api" .Release.Namespace) "appLabel" "integration-api" "Values" $appConfig "Root" .) }}

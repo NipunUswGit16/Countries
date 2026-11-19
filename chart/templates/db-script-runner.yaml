@@ -1,0 +1,30 @@
+{{/*
+TenantJobConfiguration: db-script-runner
+Helper: kairos.tenantJob
+Location: kairos-component-common/charts/kairos-components-common/templates/_tenantjob.tpl
+Config: db-script-runner.* (values.yaml)
+Job Version SHA: Auto-updated by 'make generate'
+*/}}
+
+{{- $config := include "bundle.getAppConfig" (dict "root" . "app" "db-script-runner") | fromYaml | default dict }}
+
+{{/*
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                            ⚠️  CRITICAL: DO NOT DELETE ⚠️                    ║
+║                                                                              ║
+║  The $jobVersion variable below is AUTO-UPDATED by 'make generate'          ║
+║  based on the SQL files SHA. Deleting or modifying this variable will       ║
+║  cause database migration failures.                                         ║
+║                                                                              ║
+║  If you need to regenerate it, run: make generate                           ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+*/}}
+{{- $jobVersion := "ed253ccdaaadf5f4eb1e8508e028387932544069b0138491314294d06d625f50" }}
+
+{{ include "kairos.tenantJob" (dict 
+  "name" (printf "%s-db-script-runner" .Release.Namespace) 
+  "appLabel" "db-script-runner" 
+  "Values" $config 
+  "Root" . 
+  "jobVersion" $jobVersion
+) }}

@@ -1,0 +1,87 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Client API",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/client-api/main.go",
+            "env": {
+                // Local Kairos Postgres defaults only — not used in real environments
+                "POSTGRES_URL_TEMPLATE": "postgres://postgres:postgres@local.pac.ifsdevworld.com:30032/postgres", // trufflehog:ignore
+                "POSTGRES_CONNECTION_POOL_SIZE": "10",
+                "POSTGRES_CONNECT_TIMEOUT": "30s",
+                "POSTGRES_TIMEOUT": "30s",
+                "MEM_LIMIT": "100MiB",
+                "JWKS_URL": "https://local.pac.ifsdevworld.com/iam/keys",
+                "TOKEN_ISSUER": "kairos-local-iam",
+                "TOKEN_AUDIENCE": "www",
+                "LOG_LEVEL": "debug",
+                // Tracing off by default. To enable: set TRACING_ENABLED=true and
+                // kubectl port-forward -n jaeger svc/jaeger-collector 30317:4317
+                "TRACING_ENABLED": "false",
+                "TRACING_EXPORTER": "grpc",
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://localhost:30317",
+                "OTEL_EXPORTER_OTLP_TRACES_INSECURE": "true",
+                "NAMESPACE": "countries"
+            }
+        },
+        {
+            "name": "Launch Integration API",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/integration-api/main.go",
+            "env": {
+                "PORT": "8088",
+                // Local Kairos Postgres defaults only — not used in real environments
+                "POSTGRES_URL_TEMPLATE": "postgres://postgres:postgres@local.pac.ifsdevworld.com:30032/postgres", // trufflehog:ignore
+                "POSTGRES_CONNECTION_POOL_SIZE": "10",
+                "POSTGRES_CONNECT_TIMEOUT": "30s",
+                "POSTGRES_TIMEOUT": "30s",
+                "MEM_LIMIT": "100MiB",
+                "JWKS_URL": "https://local.pac.ifsdevworld.com/iam/keys",
+                "TOKEN_ISSUER": "kairos-local-iam",
+                "TOKEN_AUDIENCE": "www",
+                "LOG_LEVEL": "debug",
+                // Tracing off by default. To enable: set TRACING_ENABLED=true and
+                // kubectl port-forward -n jaeger svc/jaeger-collector 30317:4317
+                "TRACING_ENABLED": "false",
+                "TRACING_EXPORTER": "grpc",
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://localhost:30317",
+                "OTEL_EXPORTER_OTLP_TRACES_INSECURE": "true",
+                "NAMESPACE": "countries",
+                "LOAD_BATCH_SIZE": "100",
+                "LOAD_MAX_PARALLEL_WORKERS": "5",
+                "LOAD_MAX_ENTITIES_PER_REQUEST": "1000"
+            }
+        },
+        {
+            "name": "Launch Event Handler",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/event-handler/main.go",
+            "env": {
+                // Local Kairos Postgres defaults only — not used in real environments
+                "POSTGRES_URL_TEMPLATE": "postgres://postgres:postgres@local.pac.ifsdevworld.com:30032/postgres", // trufflehog:ignore
+                "POSTGRES_CONNECTION_POOL_SIZE": "10",
+                "POSTGRES_CONNECT_TIMEOUT": "30s",
+                "POSTGRES_TIMEOUT": "30s",
+                "MEM_LIMIT": "100MiB",
+                "JWKS_URL": "https://local.pac.ifsdevworld.com/iam/keys",
+                "TOKEN_ISSUER": "kairos-local-iam",
+                "TOKEN_AUDIENCE": "www",
+                "LOG_LEVEL": "debug",
+                // Tracing off by default. To enable: set TRACING_ENABLED=true and
+                // kubectl port-forward -n jaeger svc/jaeger-collector 30317:4317
+                "TRACING_ENABLED": "false",
+                "TRACING_EXPORTER": "grpc",
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://localhost:30317",
+                "OTEL_EXPORTER_OTLP_TRACES_INSECURE": "true",
+                "NAMESPACE": "countries"
+            }
+        }
+    ]
+}

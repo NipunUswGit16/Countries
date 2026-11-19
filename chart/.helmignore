@@ -1,0 +1,4 @@
+# Helm ignore file - excludes files from being packaged
+
+# Ignore development-specific values files
+values.dev.yaml

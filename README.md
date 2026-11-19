@@ -1,1 +1,978 @@
-# Countries
+# Kairos Component Development Template
+
+A golden template for developing Kairos components in the NGA ecosystem.
+
+## Table of Contents
+- [Overview](#overview)
+- [Requirements](#requirements)
+- [Architecture](#architecture)
+- [Helm Chart Bundle](#helm-chart-bundle)
+- [Development Workflows](#development-workflows)
+  - [Makefile Commands](#makefile-commands)
+  - [Local Development](#local-development)
+  - [In-Cluster Development](#in-cluster-development)
+- [CI/CD Pipeline](#cicd-pipeline)
+- [References](#references)
+
+## Overview
+
+This template provides scaffolding for creating new Kairos components that are:
+- ✅ Compatible with [NGA Local Dev](https://bitbucket.org/ifs-pd/nga-local-dev/src/main/)
+- ✅ Compatible with [Nexus Platform](https://bitbucket.org/ifs-pd/nexus-platform/src/main/)
+- ✅ Ready for CI/CD onboarding (see [CI/CD Guide](https://ifsdev.atlassian.net/wiki/spaces/PR/pages/1546125423/Step+by+step+guide+to+onboard+service+repos+onto+CI+version+v0))
+
+## Requirements
+
+### System Requirements
+| Component | Version | Notes |
+|-----------|---------|-------|
+| **OS** | Ubuntu 22.04.4 LTS on WSL (or macOS) | |
+| **Docker** | ≥26.0.1 | |
+| **Go** | ≥1.27.3 (template uses '1.27.3') | See `go.mod` / `.init.mk` `MIN_GO_VERSION` |
+| **kairos-gen** | pinned in `go.mod` (`tool`) | Code generation for topic-config, SQL, masterdata schemas and loaders. `make generate` runs `go tool kairos-gen`. |
+| **Helm** | v3.14+ | |
+| **kubectl** | v1.29+ | |
+
+### Access Requirements
+- 🔐 Access to `ifsrapidfortcache.azurecr.io` ACR + listCredentials/action (docker builds)
+- 🔐 Access to `nxsdvlglb01acr.azurecr.io` ACR (Helm chart dependency pull + default image registry)
+- 🔐 Access to nga-common libs through [nga-goproxy](https://bitbucket.org/ifs-pd/nga-goproxy/src/main/)
+
+### Recommended Tools
+- [k9s](https://k9scli.io/) - Kubernetes CLI manager
+- [pgAdmin](https://www.pgadmin.org/) or [DBeaver](https://dbeaver.io/) - PostgreSQL GUI
+
+## Architecture
+
+### Project Structure
+
+```
+kairos-component-template/
+├── cmd/                                   # Runtime entry points
+│   ├── client-api/                        # Frontend-facing REST API
+│   ├── integration-api/                   # Service-to-service REST API (+ bulk load)
+│   ├── event-handler/                     # CloudEvents processing service
+│   ├── db-script-runner/                  # Tenant SQL job image (Dockerfile only)
+│   └── dataloader/                        # Data Lake reference-data loader job image (Dockerfile only)
+├── chart/                                 # Helm chart for deployment
+│   ├── templates/                         # client-api, event-handler, integration-api, web, config
+│   ├── resources/                         # Generated topic-config.json (committed)
+│   ├── values.yaml                        # Default chart values
+│   └── values.dev.yaml                    # Local/dev overrides
+├── internal/                              # Component business logic
+│   ├── api/                               # Client API routes, request context, AppConfig
+│   ├── integration-api/                   # Integration API routes, loaders, AppConfig
+│   ├── event-handler/                     # Handler registration, request context, AppConfig
+│   └── services/                          # Shared service layer
+├── pkg/                                   # Schemas and generated contracts
+│   ├── schema/                            # Commands, events, master data
+│   ├── openapi/                           # Generated OpenAPI (integration API)
+│   ├── asyncapi/                          # Generated AsyncAPI
+│   └── json-schema/                       # Generated JSON schemas
+├── sql/                                   # SQL migrations (kairos-gen + custom)
+│   ├── 0.libs/                            # Copied from libraries via +kairos:sql:lib:
+│   ├── 1.gen/                             # Generated from EntityBase entities
+│   └── 3.custom/                          # Hand-written migrations (optional)
+├── web/                                   # React SPA frontend
+├── docs/                                  # Runtime documentation
+│   ├── client-api.md
+│   ├── integration-api.md
+│   └── event-handler.md
+└── AGENTS.md                              # Always-on Kairos invariants for agents & humans
+```
+
+Domain entities and repositories are added under `internal/domain/` and `internal/repositories/` when you scaffold features (see `internal/AGENTS.md`).
+
+### Core Components
+
+#### Client API (REST Service)
+- Frontend-facing REST API (BFF)
+- Built on Go Fiber
+- Can send commands / publish events via the outbox
+- Traffic goes through the **auth-gateway** sidecar in cluster
+- **Example endpoint**: `/api/v1/customers`
+
+📖 [View Client API Documentation](docs/client-api.md)
+
+#### Integration API (Service-to-Service REST)
+- System-facing REST surface for other backends
+- Ships with bulk load at `POST /api/core/v1/load` (loaders generated by `kairos-gen`)
+- Same thin-handler → `ServicesFactory` pattern as the client API
+- Supports k8s service to service authentication when allowed service accounts are configured in the `integration-api.k8sAllowedServiceAccounts` value.
+
+📖 [View Integration API Documentation](docs/integration-api.md)
+
+#### Event Handler (Event Processing Service)
+- Listens to and processes domain events & commands (e.g., `OrderPlaced`, `UserRegistered`, `CreateUser`)
+- Updates read models and triggers workflows
+- Propagates changes to other system components
+- **Example endpoint**: `/customer.created.1`
+
+📖 [View Event Handler Documentation](docs/event-handler.md)
+
+#### Web
+- Frontend under `web/app`
+- Deployed by the chart's `web` templates; local run via the "Launch Frontend" debug config. The web template is downloaded when a component is scaffolded.
+
+#### API Package
+The API layer (`internal/api/`) provides the Fiber-based REST API with:
+- Pre-configured middlewares for each service type
+- Common request/response handling via `kairos-component-common/api` helpers
+- Authentication and authorization
+- Observability and tracing
+
+📖 [View API Documentation](internal/api/AGENTS.md)
+
+### Architectural Patterns
+
+This template implements modern patterns for clean, maintainable Kairos components:
+
+#### ServicesFactory Pattern
+- **Locations**: `internal/api/request/`, `internal/event-handler/request/`, and `internal/integration-api/request/`
+- **Purpose**: Centralized service creation with dependency injection
+- **Benefits**: Type-safe, testable, consistent service initialization (a service must be exposed in every runtime that calls it)
+
+#### Request Context Abstraction
+- **Locations**: matching `request/context.go` under each runtime above
+- **Purpose**: Unified context type for handlers (database, config, logger, factory, sender)
+- **Benefits**: Clean handler signatures, easier testing, consistent patterns
+
+#### Message Schema Library
+- **Location**: `pkg/schema/`
+- **Purpose**: Strongly-typed CloudEvents messages (commands, events, command responses, master data)
+- **Features**: Built-in `Validate()`, component routing, payload-based messaging
+- **Benefits**: Type safety, validation at compile-time, reduced boilerplate
+
+### PostgreSQL Architecture
+
+This template uses a **schema-per-tenant, database-per-component** architecture:
+
+- **Multi-Tenancy**: Each tenant gets a dedicated PostgreSQL schema
+- **Component Isolation**: Each Kairos component has its own database
+- **Aggregate Tables**: All tables follow a 2-column pattern (id, data)
+- **JSONB Storage**: Entities stored as JSONB for schema flexibility
+- **Entity Base Types**: Domain models embed `entities.EntityBase` for consistent ID/ETag handling
+
+For detailed PostgreSQL design and implementation patterns, see [AGENTS.md](AGENTS.md).
+
+### SQL Migrations
+
+SQL migrations are automatically generated by `kairos-gen` and organized into three directories:
+
+- **`sql/0.libs/`**: SQL files from external libraries (e.g., `event_outbox`, `idempotency`) copied via `+kairos:sql:lib:` directives
+- **`sql/1.gen/`**: Auto-generated SQL files for domain entities that embed `EntityBase[T]` or `MasterDataEntityBase[T]`
+- **`sql/3.custom/`**: Manual SQL files for custom migrations (not managed by `kairos-gen`)
+
+**Required Library Directives:**
+
+All components must include these directives in their main.go files:
+
+**In `cmd/client-api/main.go` and `cmd/integration-api/main.go`:**
+```go
+// ⚠️ WARNING: DO NOT DELETE THIS DIRECTIVE
+// +kairos:sql:lib:bitbucket.org/ifs-pd/nga-event-outbox/pkg/eventsender
+```
+
+**In `cmd/event-handler/main.go`:**
+```go
+// ⚠️ WARNING: DO NOT DELETE THIS DIRECTIVE
+// +kairos:sql:lib:bitbucket.org/ifs-pd/kairos-component-common/event-handler
+```
+
+**Running Migrations:**
+
+```bash
+# Generate SQL files (runs automatically on build)
+make generate
+
+# Apply migrations to database
+make db-run
+```
+
+For detailed SQL generation documentation, see [sql/AGENTS.md](sql/AGENTS.md) and [cmd/AGENTS.md](cmd/AGENTS.md).
+
+### Testing Approach
+
+- **80% Coverage Requirement**: Enforced via the CI/CD pipeline's SonarCloud quality gate (step currently disabled, see [CI/CD Pipeline](#cicd-pipeline))
+- **Unit Tests**: Services, handlers, and domain logic (`make test-unit`)
+- **Functional Tests**: Packages under `./test/...` when present (`make test-functional`)
+- **Mock Patterns**: PostgreSQL (pgxmock), services (testify/mock)
+- **Test Utilities**: Helper packages in `kairos-component-common`
+
+For comprehensive testing examples and mock patterns, see [AGENTS.md — After Completing Work](AGENTS.md#after-completing-work).
+
+### Implementation Guides (For AI Agents & Developers)
+
+- **[Root AGENTS.md](AGENTS.md)** — Always-on Kairos invariants (skills routing, PostgreSQL, SQL libs, architecture, security)
+- **[API AGENTS.md](internal/api/AGENTS.md)** — Client API endpoint conventions
+- **[Integration API AGENTS.md](internal/integration-api/AGENTS.md)** — Integration API / loaders
+- **[Event Handler AGENTS.md](internal/event-handler/AGENTS.md)** — Event/command handler patterns
+- **[Schema AGENTS.md](pkg/schema/AGENTS.md)** — Message schema creation and validation
+- **[cmd/AGENTS.md](cmd/AGENTS.md)** — Entry-point wiring and SQL lib directives
+- **[UPGRADE.md](UPGRADE.md)** — Migration guide for template upgrades
+- **[.kairos-updates/](.kairos-updates/)** — Per-change upgrade-files applied by `kairos-component-update` (auth-gateway / chart 0.3.x lives here)
+
+## Helm Chart Bundle
+
+The template includes a Helm chart bundle for deploying your Kairos component to Kubernetes environments. The chart is designed with flexibility and best practices in mind, supporting both local development and production deployments. It depends on the `kairos-components-common` library chart (see `chart/Chart.yaml`).
+
+**Authentication:** In cluster, API and login traffic route through an **auth-gateway sidecar** injected into the client-api pod (Kyverno). Configure OAuth and session storage under `client-api.authGateway` in `chart/values.yaml`. Local KinD overrides live in `chart/values.dev.yaml` (`deploymentType: single-tenant`, in-memory sessions). See [.kairos-updates/20260811T140819-adopt-auth-gateway-sidecar.md](.kairos-updates/20260811T140819-adopt-auth-gateway-sidecar.md) for migration from direct API ingress.
+
+### Chart Structure
+
+```
+chart/
+├── templates/
+│   ├── client-api/              # Deployment, Service, Ingress, auth-gateway ConfigMap, …
+│   ├── event-handler/
+│   ├── integration-api/
+│   ├── web/
+│   ├── config/                  # Shared ConfigMaps / ExternalSecrets
+│   ├── db-script-runner.yaml
+│   ├── dataloader.yaml          # TenantJobConfiguration for the dataloader job
+│   └── _helpers.tpl
+├── resources/
+│   └── topic-config.json        # Generated by kairos-gen (committed)
+├── values.yaml                  # Default values
+├── values.dev.yaml              # Local/dev overrides
+├── Chart.yaml                   # Chart metadata + kairos-components-common dependency
+└── README.md                    # Helper reference for this chart
+```
+
+<details>
+<summary>
+
+### Supported Values
+</summary>
+The chart uses a hierarchical configuration system with global defaults and app-specific overrides. Here are the main configuration categories:
+
+#### Global Configuration
+
+**PostgreSQL Configuration (`postgres`)**
+```yaml
+postgres:
+  urlTemplate: "postgresql://postgres.example.com:5432"  # PostgreSQL connection URL template
+  # Authentication options (mutually exclusive):
+  secretName: postgres-credentials                        # Use external secret for auth
+  # OR direct authentication:
+  username: "myuser"                                     # Direct username
+  password: "mypass"                                     # Direct password
+  secret:                                                # External Secret configuration
+    kvSecretName: myapp-postgresDbCert                   # Key Vault secret name
+    refreshInterval: 15m                                 # Secret refresh interval
+    storeName: default                                   # Secret store name
+    name: postgres-cert                                  # Secret name in cluster
+```
+
+**Kafka Configuration (`kafka`)**
+```yaml
+kafka:
+  url: "kafka.example.com:9092"                     # Kafka broker URL
+  secret:                                           # External Secret configuration
+    kvSecretName: myapp-kafkaConfig                 # Key Vault secret name
+    refreshInterval: 15m                            # Secret refresh interval
+    storeName: default                              # Secret store name
+    name: kafka-config                              # Secret name in cluster
+```
+
+#### Default Configuration (`defaults`)
+
+**Resource Management**
+```yaml
+defaults:
+  replicas: 1                                       # Default number of pod replicas
+  resources:
+    limits:
+      cpu: 1000m                                    # Maximum CPU (1 core)
+      memory: 200Mi                                 # Maximum memory
+      ephemeral-storage: "1Gi"                      # Maximum ephemeral storage
+    requests:
+      cpu: 100m                                     # Requested CPU (0.1 core)
+      memory: 200Mi                                 # Requested memory
+      ephemeral-storage: "200Mi"                    # Requested ephemeral storage
+```
+
+**Application Settings**
+```yaml
+defaults:
+  imageRegistry: nxsdvlglb01acr.azurecr.io          # Default container registry
+  logLevel: error                                   # Default log level (debug, info, warn, error)
+  auth:
+    tokenAudience: www                              # JWT audience
+    jwksUrl: http://server.iam.svc.cluster.local:8080/keys
+    tokenIssuer: kairos-local-iam                   # Or tokenIssuers for multiple issuers
+```
+
+**Database Configuration**
+```yaml
+defaults:
+  postgres:
+    connectionPoolSize: 10                          # PostgreSQL connection pool size
+    connectTimeout: 30s                             # PostgreSQL connection timeout
+    timeout: 30s                                    # PostgreSQL operation timeout
+    secretMountPath: /etc/postgres                  # Secret mount path in container
+```
+
+Component-specific config keys (table names, integration URLs, feature flags, etc.) are added to `defaults` alongside the platform keys above. Adding a field also requires the matching `AppConfig` change on the Go side and the env-var wiring in the deployment template.
+
+**Performance & Scaling**
+```yaml
+defaults:
+  autoscaling:
+    enabled: false                                  # Enable/disable auto-scaling
+    minReplicas: 1                                  # Minimum replicas when scaling
+    maxReplicas: 3                                  # Maximum replicas when scaling
+    metrics:                                        # Scaling metrics configuration
+      - type: Resource
+        resource:
+          name: cpu                                 # Scale based on CPU utilization
+          target:
+            averageUtilization: 70                  # Target CPU percentage
+  
+  fiber:                                            # Fiber HTTP server configuration
+    readTimeout: "30s"                              # Request read timeout
+    writeTimeout: "30s"                             # Response write timeout
+    prefork: false                                  # Enable multi-core utilization
+    streamRequestBody: true                         # Enable request streaming
+    etag: true                                      # Enable ETag headers for caching
+```
+
+**High Availability**
+```yaml
+defaults:
+  podDisruptionBudget:
+    enabled: true                                   # Enable Pod Disruption Budget
+    minAvailable: 2                                 # Minimum available pods during disruption
+  
+  topologySpreadConstraints:                        # Pod distribution across zones
+    - maxSkew: 1                                    # Maximum difference between zones
+      topologyKey: topology.kubernetes.io/zone     # Distribution key
+      whenUnsatisfiable: ScheduleAnyway            # Scheduling behavior
+  
+  affinity:                                         # Pod anti-affinity for high availability
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100                               # Preference weight
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname     # Distribute across nodes
+```
+
+**Observability**
+```yaml
+defaults:
+  tracing:
+    enabled: true                                   # Enable tracing (requires TRACING_ENABLED=true in component env)
+    exporter: disabled                              # Tracing exporter (disabled, grpc, stdout)
+  
+  serviceMonitor:                                   # Prometheus monitoring
+    labels:
+      release: monitoring                           # Label for Prometheus discovery
+```
+
+**Platform Component Tracing** (independent of `defaults.tracing`; opt-in — these keys ship commented out in `values.yaml`):
+```yaml
+eventAdapter:
+  tracing:
+    enabled: false  # Opt-in tracing for event-adapter sidecar
+
+outboxPublisher:
+  tracing:
+    enabled: false  # Opt-in tracing for outbox publisher
+
+eventRelay:
+  tracing:
+    enabled: false  # Opt-in tracing for event relay
+```
+
+**How Tracing Works:**
+- **Application tracing** (`client-api`, `integration-api`, `event-handler`): Controlled by `defaults.tracing.enabled` + `TRACING_ENABLED` env var
+- **Platform component tracing**: Independent `*.tracing.enabled` flags for adapter/outbox/relay
+- Both require `TRACING_EXPORTER` to be set (grpc/stdout) and an OTLP endpoint configured
+
+**Tracing Environment Variables:**
+
+Applications read these environment variables (auto-injected by Helm via `_env.tpl`):
+
+- **`TRACING_ENABLED`**: Master gate. If not `"true"`, no tracing is initialized.
+  - Set via: `defaults.tracing.enabled` in values.yaml → rendered to pod env
+- **`TRACING_EXPORTER`**: Backend type (`disabled`, `grpc`, `stdout`)
+  - If `disabled`: Tracing disabled even if `TRACING_ENABLED=true`
+- **`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`**: OTLP gRPC endpoint (e.g., `http://jaeger-collector.jaeger.svc.cluster.local:4317`)
+- **`TRACING_DISABLE_TLS`**: Set to `"true"` for local dev (insecure connections)
+
+**Platform components** (event-adapter, outbox-publisher, event-relay):
+- Read their own `*.tracing.enabled` flags from ConfigMap `component-config`
+- Independent of application tracing settings
+- Also respect `TRACING_EXPORTER` and OTLP endpoint settings
+
+#### App-Specific Configuration
+
+Each application (`client-api`, `event-handler`, `integration-api`, `web`) can override default values:
+
+**Container Configuration**
+```yaml
+client-api:
+  imageRepository: nga/myapp-client-api             # Container image repository
+  imageTag: 1.0.0                                  # Container image tag
+  imageDigest: "sha256:abcd..."                     # Container image digest (optional)
+```
+
+**Override Examples**
+```yaml
+client-api:
+  logLevel: debug                                   # Override default log level
+  replicas: 3                                       # Override default replica count
+  
+  postgres:                                         # Merge with defaults.postgres
+    connectionPoolSize: 20                          # Override connection pool size
+    secretName: client-api-postgres                 # App-specific PostgreSQL secret
+  
+  fiber:                                            # Merge with defaults.fiber
+    readTimeout: "60s"                              # Override read timeout for this app
+    prefork: true                                   # Enable prefork for this app only
+```
+
+**JWT Authentication (`defaults.auth`)** — validated by the Go apps (JWKS / issuer / audience), injected via `kairos.env.common`.
+
+**Auth Gateway (`client-api.authGateway`)** — browser login + `/api` proxy (Kyverno sidecar):
+```yaml
+client-api:
+  authGateway:
+    enabled: true
+    deploymentType: multitenant          # values.dev.yaml uses single-tenant for KinD
+    applicationId: countries
+    sessionStorageType: redis            # values.dev.yaml uses memory for single-replica
+    oauth:
+      clientId: ""
+      clientSecret: ""
+      authUrl: ""
+      tokenUrl: ""
+      logoutUrl: ""
+      redirectUrl: ""
+    redis:
+      secretName: "auth-gateway-redis-secret"
+```
+
+See `chart/values.yaml` comments and [chart/README.md](chart/README.md) for the full helper list.
+
+</details>
+
+
+## Development Workflows
+
+### Makefile Commands
+
+The repository provides a comprehensive Makefile system for Go development workflows, backed by `kairos-component-common/toolkit` (resolved via `.init.mk`).
+
+```bash
+make check-all  # Runs: tidy → fmt → vet → lint → test
+make help       # List all targets
+```
+
+| Command | Purpose | Usage |
+|---------|---------|-------|
+| `make tidy` | Clean up dependencies | Remove unused deps from go.mod/go.sum |
+| `make generate` | Generate configs and SQL | Auto-generates Kafka topic configuration, entities json schema, SQL migrations, master data CDC configurations and loaders from schema dependencies |
+| `make install-hooks` | Install git hooks | Installs the toolkit **pre-push** hook (runs `make generate`, then `make lint` and `make test` before each push) |
+| `make fmt` | Format code | Standard go fmt across all packages |
+| `make vet` | Static analysis | Detect potential bugs, unreachable code |
+| `make lint` | Run linter | Full golangci-lint analysis with reports |
+| `make lint-fix` | Auto-fix linting | Fix linting issues where possible |
+| `make test` | Run tests | Runs `test-unit` and `test-functional` (unit and functional tests + coverage per module) |
+| `make test-unit` | Unit tests only | `coverage-unit.out`, `report-unit.json`, `test-reports/report-unit.xml` |
+| `make test-functional` | Functional tests only | Packages under `./test/...`; `coverage-functional.out`, `report-functional.json`, `test-reports/report-functional.xml` (skipped if no `./test/...`) |
+| `make coverage` | Combined coverage | Merges per-module `coverage.out` into repo-root `coverage.out` |
+| `make db-run` | Run SQL migrations | Apply SQL migrations to the tenant schema |
+| `make deploy` | Build + deploy locally | Local cluster deploy (see In-Cluster Development) |
+| `make deploy-delete` | Tear down local deploy | Deletes the component namespace |
+| `make deploy-wipe` | Tear down local deploy incl. database and topics | Deletes the namespace, database, Kafka topics and consumer groups |
+
+#### Automatic Code Generation (kairos-gen)
+
+The template includes **kairos-gen**, a code generation tool that automatically generates:
+1. **Kafka topic configuration** (`chart/resources/topic-config.json`) from event-handler registrations
+2. **PostgreSQL SQL migrations** (`sql/0.libs/`, `sql/1.gen/`) for library directives and `EntityBase` / `MasterDataEntityBase` entities
+3. **Bulk-load loaders** (`internal/integration-api/loaders/generated/`) for the integration API's `POST /api/core/v1/load` endpoint
+4. **Schema and API documentation artifacts** (`pkg/json-schema/`, `pkg/openapi/`, `pkg/asyncapi/`)
+
+**How it works:**
+1. Scans `cmd/*`, `internal/event-handler`, `internal/domain`, and `pkg/schema` packages
+2. Identifies external schema imports (from other Kairos components) for topic configuration
+3. Discovers local entities that embed `EntityBase` or `MasterDataEntityBase` for SQL generation
+4. Generates Kafka topic subscriptions from discovered Events and Master Data types
+5. Generates SQL `CREATE TABLE` statements with JSONB structure under `sql/1.gen/`
+
+**When it runs:**
+- **Automatically on build**: `make build-all` and `make deploy` depend on `install-hooks` and run `generate` as part of their workflows
+- **Automatically before push**: With hooks installed (`make install-hooks`, or indirectly via `make build-all` / `make deploy`), the **pre-push** hook runs `make generate` (which invokes `go tool kairos-gen` from the component `go.mod` pin), fails if generated files or SQL SHA are stale, then runs `make lint` and `make test`
+- **Manually**: Run `make generate` to regenerate files anytime
+- **In CI/CD**: Pipeline validates generated files are up to date
+
+**First-time setup:**
+```bash
+# Git hooks are auto-installed on first deploy
+make deploy
+
+# Or install hooks manually
+make install-hooks
+```
+
+**Manual generation:**
+```bash
+# Generate topic-config.json, entities json schema, SQL migrations, master data CDC configurations and loaders
+make generate
+
+# Verify the generated files
+cat chart/resources/topic-config.json
+ls -la sql/0.libs sql/1.gen
+```
+
+**What's generated:**
+
+**1. Topic Configuration** (`chart/resources/topic-config.json`):
+- **Events**: Grouped by component (e.g., `order-service` topic with multiple event types)
+- **Master Data**: Individual topics per entity (e.g., `product-service.product.1`)
+
+Example topic-config.json:
+```json
+{
+  "tenantInputTopics": [
+    {
+      "inputTopic": "notes-demo",
+      "types": [
+        "notes-demo.note-created.1",
+        "notes-demo.note-deleted.1",
+        "notes-demo.note-updated.1"
+      ]
+    }
+  ],
+  "outputTopic": "todo-demo"
+}
+```
+
+**2. SQL Migrations** (`sql/1.gen/*.sql`):
+
+For each entity like:
+```go
+type Order struct {
+    entities.EntityBase[entities.EntityId] `json:",inline"`
+    CustomerName string `json:"customerName"`
+    TotalAmount  float64 `json:"totalAmount"`
+}
+```
+
+Generates `sql/1.gen/orders.sql`:
+```sql
+CREATE TABLE IF NOT EXISTS orders (
+    id UUID NOT NULL,
+    data JSONB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_orders_data_gin ON orders USING GIN (data);
+```
+
+**Customizing SQL generation:**
+
+Use `+kairos:sql:` directives to customize tables:
+```go
+// +kairos:sql:table:custom_orders
+// +kairos:sql:column:created_at TIMESTAMP NOT NULL DEFAULT NOW()
+// +kairos:sql:index:idx_orders_customer BTREE ((data->>'customerId'))
+type Order struct {
+    entities.EntityBase[entities.EntityId] `json:",inline"`
+    // ...
+}
+```
+
+> **💡 Note**: If you don't import external schemas, an empty but valid topic config is generated. SQL files are only generated for entities that embed `EntityBase` or `MasterDataEntityBase`.
+
+For complete documentation, see [sql/AGENTS.md](sql/AGENTS.md) and [cmd/AGENTS.md](cmd/AGENTS.md).
+
+#### Running SQL Migrations
+
+The template includes SQL migration utilities to automatically apply generated SQL files to your PostgreSQL database.
+
+**Basic usage:**
+```bash
+# Run migrations with default tenant ID
+make db-run
+
+# Run migrations with custom tenant ID
+make db-run TENANT_ID=custom-tenant-id
+```
+
+**Configuration:**
+
+All database connection parameters can be overridden:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_HOST` | `localhost` | PostgreSQL host |
+| `DB_PORT` | `5432` | PostgreSQL port |
+| `DB_NAME` | `countries` | Database name |
+| `DB_USER` | `postgres` | Database user |
+| `DB_PASSWORD` | *(empty)* | Database password |
+| `TENANT_ID` | `11111111-1111-1111-1111-1111111111ab` | Tenant ID (schema suffix) |
+
+**Tenant schema naming:**
+
+The tenant schema is automatically derived from the `TENANT_ID`:
+- Format: `<lowercase_tenant_id_without_dashes>`
+
+**Other SQL commands:**
+```bash
+# Drop tenant schema (destructive!)
+make db-drop-tenant
+```
+
+**Important notes:**
+- SQL migrations are **idempotent** (safe to run multiple times)
+- Each tenant has an isolated schema
+- Tables are created with `IF NOT EXISTS` clause
+- Run `make generate` first to create SQL migration files
+
+#### Analyzing Test Coverage
+
+Coverage files are written at the **module** root (each directory with a `go.mod`). Typical outputs:
+
+- **Unit tests** (`make test-unit`): `coverage-unit.out`
+- **Functional tests** (`make test-functional`, packages under `./test/...`): `coverage-functional.out` when any exist
+- **Combined** (`make coverage`): per-module `coverage.out` merged to **`coverage.out` at the repository root**
+
+After `make test-unit` or `make test-functional` in a single module:
+
+```bash
+# Unit coverage for the current module
+go tool cover -func=coverage-unit.out
+
+# Functional coverage (when ./test/... packages exist)
+go tool cover -func=coverage-functional.out
+```
+
+After `make coverage` from the repo root:
+
+```bash
+go tool cover -func=coverage.out
+```
+
+`make test-debug` still produces `cover.out` and `report.json` in the module where it runs.
+
+**Visual Coverage in VS Code/Cursor:**
+Use the command palette: `Test Coverage in Current Package`
+
+This highlights the opened file showing covered (green) and uncovered (red) lines, making it easy to identify untested code paths.
+
+> **💡 Important**: Ensure you meet the [80% coverage requirement](#1-code-quality--standards) enforced by the CI/CD pipeline to avoid build rejections.
+
+#### Application Management
+
+**Discovery & Building:**
+```bash
+make list-apps    # Show all available apps (cmd/*/main.go)
+make build-all    # Build all applications to ./bin/
+```
+
+**Single Application Workflow:**
+```bash
+make run APP=client-api       # Build and run a selected application
+```
+
+#### Maintenance Commands
+
+```bash
+make clean          # Remove toolkit test/lint artifacts (coverage *.out, JUnit inputs, golangci-lint-report.xml, test-reports/, etc.)
+make clean-apps     # Remove built binaries from ./bin/
+make golangci-lint  # Auto-install linter to ./bin/ if needed
+make help           # Show all available commands
+```
+
+### How to develop the Kairos Component
+
+Write your business logic and event handlers according to:
+
+📖 [View Client API Documentation](docs/client-api.md)
+📖 [View Integration API Documentation](docs/integration-api.md)
+📖 [View Event Handler Documentation](docs/event-handler.md)
+
+#### Custom Configuration Parameters
+
+Typed configuration lives in each runtime's `config/app_config.go` (`internal/api/config`, `internal/integration-api/config`, `internal/event-handler/config`), with env vars wired through the chart's deployment templates.
+
+### Local Development
+
+Perfect for rapid development and debugging.
+
+#### 1. Run Your Applications
+
+Use your IDE debugger or run directly. The repo ships `.vscode/launch.json` with Client API, Integration API, Event Handler, and Frontend configs.
+
+<details>
+<summary>Click to expand launch.json (abridged)</summary>
+
+```json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Client API",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/client-api/main.go",
+            "env": {
+                "POSTGRES_URL_TEMPLATE": "postgres://postgres:postgres@local.pac.ifsdevworld.com:30032/postgres",
+                "POSTGRES_CONNECTION_POOL_SIZE": "10",
+                "POSTGRES_CONNECT_TIMEOUT": "30s",
+                "POSTGRES_TIMEOUT": "30s",
+                "MEM_LIMIT": "100MiB",
+                "JWKS_URL": "https://local.pac.ifsdevworld.com/iam/keys",
+                "TOKEN_ISSUER": "kairos-local-iam",
+                "TOKEN_AUDIENCE": "www",
+                "LOG_LEVEL": "debug",
+                "TRACING_EXPORTER": "grpc",
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://localhost:4317",
+                "NAMESPACE": "countries"
+            }
+        },
+        {
+            "name": "Launch Integration API",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/integration-api/main.go",
+            "env": {
+                "POSTGRES_URL_TEMPLATE": "postgres://postgres:postgres@127.0.0.1.nip.io:30032/postgres",
+                "POSTGRES_CONNECTION_POOL_SIZE": "10",
+                "JWKS_URL": "https://127.0.0.1.nip.io:443/iam/keys",
+                "TOKEN_ISSUER": "kairos-local-iam",
+                "TOKEN_AUDIENCE": "www",
+                "LOG_LEVEL": "debug",
+                "NAMESPACE": "countries",
+                "INTEGRATION_DEFAULT_BATCH_SIZE": "100",
+                "INTEGRATION_MAX_BATCH_SIZE": "1000",
+                "INTEGRATION_MAX_PARALLEL_WORKERS": "5",
+                "INTEGRATION_BATCH_TIMEOUT": "30s"
+            }
+        },
+        {
+            "name": "Launch Event Handler",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/cmd/event-handler/main.go",
+            "env": {
+                "POSTGRES_URL_TEMPLATE": "postgres://postgres:postgres@local.pac.ifsdevworld.com:30032/postgres",
+                "POSTGRES_CONNECTION_POOL_SIZE": "10",
+                "JWKS_URL": "https://local.pac.ifsdevworld.com/iam/keys",
+                "TOKEN_ISSUER": "kairos-local-iam",
+                "TOKEN_AUDIENCE": "www",
+                "LOG_LEVEL": "debug",
+                "TRACING_EXPORTER": "grpc",
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://localhost:4317",
+                "NAMESPACE": "countries"
+            }
+        },
+        {
+            "name": "Launch Frontend",
+            "type": "node-terminal",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/web/app",
+            "command": "npm start",
+            "env": {
+                "PORT": "3000"
+            }
+        }
+    ]
+}
+```
+</details>
+
+**Command line**: `go run cmd/client-api/main.go` (with the same env vars as the launch config).
+
+> **💡 Tip**: Prefer the checked-in `.vscode/launch.json` over copying the snippet above when values drift.
+
+### In-Cluster Development
+
+Full Kubernetes environment using [NGA Local Dev](https://bitbucket.org/ifs-pd/nga-local-dev/src/main/) and the Kairos CLI.
+
+```bash
+# Create a local cluster (examples)
+kairos cluster create
+kairos cluster create --include postgresql jwk-provider
+
+# Delete cluster
+kairos cluster delete ifslocal
+
+# Get a token from jwk-provider (if installed)
+kairos token get
+```
+
+Deploy this component into the local cluster:
+
+```bash
+make deploy              # build images + deploy (hooks installed as needed)
+make deploy-only         # deploy without rebuild
+make deploy-delete       # remove the component namespace
+make deploy-wipe         # tear down local deploy incl. database and topics
+```
+
+Use `chart/values.dev.yaml` for local overrides (auth-gateway single-tenant / in-memory sessions, debug log level, local registry, etc.).
+
+## CI/CD Pipeline
+
+This template includes a comprehensive Bitbucket pipeline that provides automated quality gates, security scanning, and deployment workflows for your Kairos component.
+
+### Pipeline Architecture
+
+The pipeline uses **parallel execution** for optimal performance and includes multiple quality gates to ensure code reliability and security.
+
+#### Automated Pipelines
+
+**Pull Request Pipeline** (triggers on all PRs):
+```
+├─ Codegen Validation (parallel)   # make generate must produce no changes
+├─ Lint Code (parallel)            # golangci-lint analysis
+├─ Unit Tests (parallel)           # go test + coverage (unit)
+├─ Functional Tests (parallel)     # go test + coverage (./test/...)
+└─ Trivy Security Scan (parallel)
+```
+
+**Main Branch Pipeline** (triggers on main branch pushes):
+```
+Same as PR pipeline +
+└─ Release libraries (auto-release of Go modules via the toolkit)
+```
+
+> **ℹ️ Note**: SonarCloud and Veracode step definitions exist in `bitbucket-pipelines.yml` but are currently commented out.
+
+#### Custom Manual Pipelines
+
+Deployment pipelines are imported from the shared **nexus-ci** definitions (`nexus-ci:main:.bitbucket/v0/shared-pipelines.yml`):
+
+- **`rollout`** — progressive environment rollout
+- **`hotfix-rollout`** — hotfix rollout path
+- **`preview`** — preview environment deployment
+
+### Pipeline Steps Detailed
+
+#### 1. **Code Quality & Standards**
+
+| Step | Purpose | Artifacts |
+|------|---------|-----------|
+| **Codegen Validation** | Runs `make generate` and fails if any generated file, `go.mod`, or `go.sum` differs from the committed state | — |
+| **Lint Code** | Runs `golangci-lint` for code style, complexity, and best practices | `golangci-lint-report.xml` |
+| **Unit Tests** | Runs `make test-unit` per module: unit packages (excludes `./test/...`), JUnit from `go test -json` | `govet-report.out`, `coverage-unit.out`, `report-unit.json`, `test-reports/report-unit.xml` |
+| **Functional Tests** | Runs `make test-functional` per module: packages under `./test/...` only (skipped when none) | `coverage-functional.out`, `report-functional.json`, `test-reports/report-functional.xml` |
+| **SonarCloud Analysis** *(currently disabled)* | Code quality analysis with quality gate enforcement | Merges `**/coverage-unit.out` and `**/coverage-functional.out` into `coverage.out`; SonarCloud dashboard + quality gate |
+
+> **⚠️ Coverage Requirement**: The **80% test coverage** quality gate (80% coverage of changed code per commit) is enforced through the SonarCloud step, which is currently commented out — keep coverage up so builds pass when it is re-enabled.
+
+#### 2. **Security & Vulnerability Scanning**
+
+| Step | Purpose | Details |
+|------|---------|---------|
+| **Trivy Scan** | Filesystem vulnerability scan for HIGH/CRITICAL issues | Fails pipeline on critical vulnerabilities |
+| **Veracode Package** *(currently disabled)* | Prepares Go code package for static analysis | Creates `veracode/*.zip` for scanning |
+| **Veracode SCA** *(currently disabled)* | Software Composition Analysis for dependency vulnerabilities | Agent-based scan requiring `SRCCLR_API_TOKEN` |
+| **Veracode SAST** *(currently disabled)* | Static Application Security Testing | Generates `*.sast.json` reports |
+| **Veracode App Scan** *(currently disabled)* | Full policy/sandbox scan (main branch only) | Creates Veracode application profile |
+
+#### 3. **Dependency Management**
+
+| Step | Purpose | Configuration |
+|------|---------|---------------|
+| **Renovate** | Automated dependency updates and security patches | Configured via `renovate.config.js` + `renovate.json` (runs as a service, not a pipeline step) |
+
+#### 4. **Library Release** (main branch only)
+
+The **Release libraries** step auto-releases the repo's Go modules via the toolkit's `auto-release.sh`, committing GPG-signed tags as the Renovate bot user.
+
+#### 5. **Deployment Pipelines**
+
+Environment rollout is handled by the shared nexus-ci custom pipelines (`rollout`, `hotfix-rollout`, `preview` — see [Custom Manual Pipelines](#custom-manual-pipelines)), all requiring manual triggers.
+
+### Pipeline Configuration
+
+#### Build Environment
+- **Base Image**: `golang:1.27.3`
+- **Memory**: 2x default size (entire pipeline)
+- **Docker Service**: 4GB memory allocation
+- **Clone Depth**: Full repository history
+
+#### Caching Strategy
+- **Go Modules**: `/go/pkg/mod` (speeds up dependency downloads)
+- **Trivy**: `.trivycache` (speeds up vulnerability database downloads)
+
+#### Required Environment Variables
+
+**Repository Access**:
+- `KAIROS_BB_ACCESS_TOKEN` - Bitbucket API token (`x-token-auth`) for private Go modules. Replaces deprecated app passwords (see [CHANGE-3222](https://developer.atlassian.com/cloud/bitbucket/changelog#CHANGE-3222)). Used by every `go mod download` step, including Release libraries.
+
+**Library Release** (main branch `Release libraries` step):
+- `KAIROS_RENOVATE_BITBUCKET_EMAIL` - committer email for release commits
+
+**Renovate** (`renovate.config.js`; not pipeline git HTTPS):
+- `KAIROS_RENOVATE_BITBUCKET_USERNAME`, `KAIROS_RENOVATE_BITBUCKET_PASSWORD` - Renovate bot Bitbucket credentials
+
+**Security Scanning** (only needed if the commented-out steps are re-enabled):
+- `VERACODE_API_ID`, `VERACODE_API_KEY` - Veracode authentication
+- `SRCCLR_API_TOKEN` - Veracode SCA agent token
+- `SONAR_TOKEN` - SonarCloud authentication
+
+The custom rollout pipelines define their own variables in the shared nexus-ci definitions.
+
+### Pipeline Benefits
+
+✅ **Automated Quality Gates** - Prevents low-quality code from reaching production  
+✅ **Parallel Execution** - Optimized build times through concurrent steps  
+✅ **Security-First** - Multiple vulnerability scanning layers  
+✅ **Manual Deployment Control** - Prevents accidental production deployments  
+✅ **Audit Trail** - Complete deployment history through PR-based deployments  
+✅ **Dependency Management** - Automated security updates via Renovate  
+
+
+## References
+- 🏗️ Inspired by [NGA POC](https://bitbucket.org/ifs-pd/nga-poc/src/main/poc2/)
+- 📚 Building blocks on [PoC2 Documentation](https://ifsdev.atlassian.net/wiki/spaces/NGA/pages/277315833/The+building+blocks)
+
+### Kafka/CloudEvents Utilities
+
+Produce a CloudEvents-formatted message to Redpanda/Kafka. The command ensures the topic exists (creates it if missing) and then produces the message.
+
+Prerequisites:
+
+- `rpk` installed and reachable in PATH
+- Broker accessible (default: `redpanda-0.redpanda.local.pac.ifsdevworld.com:30092`)
+
+Usage:
+
+```bash
+make kafka-produce TOPIC=<topic> CE_TYPE=<type> DATA='[...]' \
+  [BROKERS=<host:port>] [TENANT_ID=<tenant>] [SUBJECT=<subject>] [SOURCE=<source>]
+```
+
+Notes:
+
+- `DATA` must be single-quoted JSON to avoid shell expansion
+- CloudEvents headers are set: `ce_id`, `ce_source`, `ce_specversion=1.0`, `ce_subject`, `ce_time` (UTC ISO8601 like 2025-09-30T04:41:29Z), `ce_type`, `ce_ifstenantid`, and `content-type=application/json`
+- Default `TENANT_ID`: `11111111-1111-1111-1111-1111111111ab`
+
+Examples:
+
+```bash
+# Using defaults for SUBJECT (component name) and BROKERS
+make kafka-produce \
+  TOPIC=$(COMPONENT_NAME)-input.11111111-1111-1111-1111-1111111111ab \
+  CE_TYPE=order.create \
+  DATA='[{"orderNumber":"ORD-001","customField":"value"}]'
+
+# Overriding broker
+make kafka-produce \
+  TOPIC=$(COMPONENT_NAME).11111111-1111-1111-1111-1111111111ab \
+  CE_TYPE=order.create \
+  BROKERS=localhost:9092 \
+  DATA='[{"orderNumber":"ORD-001","customField":"value"}]'
+
+# Help
+make kafka-help
+```

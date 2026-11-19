@@ -1,0 +1,13 @@
+# Normalize line endings for the whole tree.
+#
+# `text=auto` lets Git decide per file whether content is text (and therefore
+# eligible for normalization) or binary (left byte-for-byte untouched). `eol=lf`
+# pins the checked-out and stored form of every text file to LF, so a checkout on
+# Windows no longer introduces CRLF that a later `kairos-component-update` merge
+# would surface as a whole-file line-ending diff. The tree was renormalized once
+# when this file was added (`git add --renormalize .`); nothing else is needed.
+#
+# The component-update merge skill is intentionally unaware of these attributes —
+# it LF-normalizes its own merge inputs — so this file exists purely to keep the
+# committed template, and every component created from it, on LF.
+* text=auto eol=lf

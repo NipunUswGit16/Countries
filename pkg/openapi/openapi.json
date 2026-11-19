@@ -1,0 +1,221 @@
+{
+  "basePath": "/api",
+  "definitions": {
+    "api.ResponseBody": {
+      "properties": {
+        "data": {},
+        "message": {
+          "type": "string"
+        },
+        "success": {
+          "example": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "errors.ErrRequestErrorResponse": {
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "statusCode": {
+          "type": "integer"
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "types.LoadError": {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "types.LoadRequest": {
+      "properties": {
+        "defaultType": {
+          "description": "DefaultType supplies the entity type for any entities[] element that omits\nits own _type. A non-empty per-entity _type always wins. Matching is\ncase-sensitive against the registered PascalCase (or explicit) identity.",
+          "type": "string"
+        },
+        "entities": {
+          "items": {
+            "$ref": "#/definitions/types.TypedEntity"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "types.LoadResponse": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/definitions/types.LoadResult"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "$ref": "#/definitions/types.LoadSummary"
+        }
+      },
+      "type": "object"
+    },
+    "types.LoadResult": {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/types.LoadError"
+        },
+        "index": {
+          "type": "integer"
+        },
+        "reason": {
+          "description": "Reason explains why the entity landed in its Status. Only set when the\nstatus needs explaining (skips); omitted for created/updated/failed.",
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "types.LoadSummary": {
+      "properties": {
+        "failed": {
+          "type": "integer"
+        },
+        "skipped": {
+          "type": "integer"
+        },
+        "succeeded": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "types.TypedEntity": {
+      "properties": {
+        "_type": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "info": {
+    "contact": {},
+    "description": "System-to-system REST surface for this Kairos component.",
+    "title": "Integration API",
+    "version": "1.0"
+  },
+  "paths": {
+    "/core/v1/load": {
+      "post": {
+        "consumes": [
+          "application/json"
+        ],
+        "description": "Bulk upsert of typed entities into the tenant schema. Optional request-level `defaultType` supplies `_type` when an entity omits it; a non-empty per-entity `_type` always wins. The effective type must match a registered loader. Load is always ETag-guarded; omitted etag never overwrites an existing row. Status codes describe the request (503 capacity, 504 deadline-before-work, 500 startup failure); per-entity codes in the body describe the rows.",
+        "parameters": [
+          {
+            "description": "Multi-entity load request",
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/types.LoadRequest"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/api.ResponseBody"
+                },
+                {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/definitions/types.LoadResponse"
+                    }
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/errors.ErrRequestErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/errors.ErrRequestErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/errors.ErrRequestErrorResponse"
+            }
+          },
+          "504": {
+            "description": "Gateway Timeout",
+            "schema": {
+              "$ref": "#/definitions/errors.ErrRequestErrorResponse"
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Load entities",
+        "tags": [
+          "core"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "securityDefinitions": {
+    "BearerAuth": {
+      "description": "JWT bearer token: \"Bearer <token>\".",
+      "in": "header",
+      "name": "Authorization",
+      "type": "apiKey"
+    }
+  },
+  "swagger": "2.0"
+}

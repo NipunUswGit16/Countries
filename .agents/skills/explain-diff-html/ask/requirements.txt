@@ -1,0 +1,7 @@
+# Optional deps for `explain-diff serve` (document Ask sidecar).
+# Requires Python >= 3.10. Prefer a venv next to the skill or component:
+#   python3.13 -m venv .venv && .venv/bin/pip install -r ask/requirements.txt
+cursor-sdk>=1.0.0
+starlette>=0.40.0
+uvicorn[standard]>=0.30.0
+httpx>=0.27.0

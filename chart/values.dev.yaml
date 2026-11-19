@@ -1,0 +1,198 @@
+# ==============================================================================
+# NGA COMPONENT DEVELOPMENT VALUES
+# ==============================================================================
+# This file contains ONLY dev-specific overrides for values.yaml.
+# All other values are inherited from values.yaml.
+# This Overrides default values.yaml for development purposes.
+# ==============================================================================
+
+ingress:
+  tenantHost: local.pac.ifsdevworld.com
+
+defaults:
+  logLevel: debug
+  imageRegistry: registry:5000
+# tracing enabled for client api and event handler for local development
+  tracing:
+    enabled: true
+    disableTls: true
+    endpoint: "http://jaeger-collector.jaeger.svc.cluster.local:4317"
+
+  autoscaling:
+    enabled: false
+
+  replicas: 1
+
+  # metrics default to CPU@70% + memory@80% in the library (_hpa.tpl)
+  # Enable explicitly once Prometheus and Grafana are installed
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: monitoring
+
+client-api:
+  auth:
+    tokenAudience: "www"
+  imageRepository: nga/countries-client-api
+  imageTag: 0.0.1
+  imageDigest: null
+  imagePullPolicy: Always
+  resources:
+    requests:
+      memory: 16Mi
+      cpu: null
+    limits:
+      memory: 64Mi
+      cpu: null
+
+  authGateway:
+    deploymentType: single-tenant
+    # In-memory matches single-replica dev (defaults.replicas: 1, autoscaling off).
+    # Use redis + multiple replicas if you scale client-api past one pod.
+    sessionStorageType: memory
+    #proxyRoutes: /api->http://127.0.0.1:8080
+    #bypassHeaders: Authorization
+    #oauthScopes: "openid profile email"
+    #readHeaderTimeout: 10s
+    #shutdownTimeout: 30s
+    #keyvaultUrl: "https://dummy.vault.azure.net/"
+    oauth:
+      clientId: www
+      clientSecret: secret
+      authUrl: http://local.pac.ifsdevworld.com/iam/oauth2/authorize
+      tokenUrl: http://server.iam.svc.cluster.local:8080/oauth2/token
+      logoutUrl: http://local.pac.ifsdevworld.com/iam/oauth2/logout
+      redirectUrl: http://local.pac.ifsdevworld.com/countries/client/auth/v1/callback
+
+integration-api:
+  auth:
+    tokenAudience: "www"
+  imageRepository: nga/countries-integration-api
+  imageTag: 0.0.1
+  imageDigest: null
+  imagePullPolicy: Always
+  resources:
+    requests:
+      cpu: null
+      memory: 16Mi
+    limits:
+      cpu: null
+      memory: 64Mi
+
+db-script-runner:
+  enabled: false
+  imageRepository: nga/countries-db-script-runner
+  imageTag: 0.0.1
+  imageDigest: null
+  imagePullPolicy: Always
+
+dataloader:
+  enabled: false
+
+web:
+  imageRepository: nga/countries-web
+  imageTag: 0.0.1
+  imageDigest: null
+  imagePullPolicy: Always
+
+  fullstoryOrgId: ""
+  fullstoryDevMode: "false"
+  resources:
+    requests:
+      cpu: null
+      memory: 4Mi
+    limits:
+      cpu: null
+      memory: 16Mi
+
+event-handler:
+  imageRepository: nga/countries-event-handler
+  imageTag: 0.0.1
+  imageDigest: null
+  imagePullPolicy: Always
+  resources:
+    requests:
+      cpu: null
+      memory: 16Mi
+    limits:
+      cpu: null
+      memory: 64Mi
+
+# Sidecar tracing — independent of defaults.tracing (app pods). Local cluster only (values.dev.yaml).
+eventAdapter:
+  tracing:
+    enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 16Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+
+outboxPublisher:
+  replicaCount: 1
+  tracing:
+    enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 16Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+
+eventRelay:
+  replicaCount: 1
+  tracing:
+    enabled: true
+  resources:
+    requests:
+      cpu: 25m
+      memory: 8Mi
+      ephemeral-storage: 100Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+      ephemeral-storage: 256Mi
+
+kafka:
+  url: redpanda-0.redpanda.redpanda.svc.cluster.local:9093
+  saslMechanism: DISABLED
+  disableTls: true
+  secret: null
+  secretName: kafka-config
+  produceRetries: 2
+  deliveryTimeout: 10s
+  secretConfigFormat: yaml
+
+postgres:
+  service: postgres
+  port: 5432
+  cluster:
+    namespace: postgres
+
+# kafka-connect is not a default local service — leave enabled false until
+# `kairos cluster services install kafka-connect`, then
+# `make deploy HELM_EXTRA_ARGS='--set debezium.enabled=true'`.
+# dbSecret.enabled=false: Kyverno owns Secret/<component>-db (no Key Vault).
+debezium:
+  enabled: false
+  componentName: countries
+  platformNamespace: kairos-kafka-connect
+  connectCluster: kairos-debezium
+  topicPrefix: countries
+  snapshotMode: initial
+  tenants: []
+  schemaIncludeRegex: "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+  publicationAutocreateMode: filtered
+  database:
+    hostname: ""
+    port: 5432
+    dbname: countries
+  dbSecret:
+    enabled: false
+    storeName: default
+    decodingStrategy: None
+    refreshInterval: 15m
+  extraConfig: {}

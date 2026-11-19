@@ -1,0 +1,113 @@
+{
+  "_comment": "Schema-only stub — NOT sufficient for a full explanation. Use spec-runonce-full.example.json as the content bar.",
+  "title": "Issue [3]: runOnce False Rerun Dedupe",
+  "summary": "Dependent configs with runOnce: false may duplicate jobs on every idle reconcile.",
+  "meta": "Source: reviewV2-bugs.md MAJOR [3] · Open bug",
+  "footer": "Generated via explain-diff-html render.py",
+  "sections": [
+    {
+      "id": "background",
+      "title": "Background",
+      "blocks": [
+        {
+          "type": "html",
+          "content": "<p><code>jobPreconditions</code> can set <code>runOnce: false</code> so a dependent reruns when the prerequisite completes again.</p>"
+        },
+        {
+          "type": "code",
+          "language": "go",
+          "file": "api/v1/tenantjobconfiguration.go",
+          "code": "// RunOnce when true (default) prevents re-triggering...\n// When false, each successful prerequisite completion may create a new job."
+        },
+        {
+          "type": "callout",
+          "variant": "warn",
+          "title": "Open bug",
+          "content": "No dedupe of which prereq completion already triggered a rerun."
+        }
+      ]
+    },
+    {
+      "id": "intuition",
+      "title": "Intuition",
+      "blocks": [
+        {
+          "type": "panels",
+          "panels": [
+            {"variant": "intended", "title": "Intended", "content": "<p>Rerun only when prereq finishes again.</p>"},
+            {"variant": "actual", "title": "Actual", "content": "<p>Rerun on every reconcile while dependent job is Finished.</p>"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "code",
+      "title": "Code",
+      "blocks": [
+        {
+          "type": "code",
+          "language": "go",
+          "file": "internal/jobs/manager/manager.go",
+          "code": "if rerunFinished || preconditions.AllowsRerunWhenFinished(jobPreconditions) {\n    return true, \"rerunning finished job per rerunFinished policy\"\n}"
+        }
+      ]
+    }
+  ],
+  "quiz": [
+    {
+      "question": "According to the API, when should runOnce: false create another dependent job?",
+      "explain": "The field documents event-based rerun per prereq completion.",
+      "distractors": "Every reconcile is the bug, not the contract.",
+      "options": [
+        {"text": "On every manager reconcile while the dependent is Finished", "correct": false},
+        {"text": "Only when the prerequisite completes successfully again", "correct": true},
+        {"text": "Only when the dependent config hash changes", "correct": false},
+        {"text": "Never; runOnce false disables deduplication entirely", "correct": false}
+      ]
+    },
+    {
+      "question": "What does AllowsRerunWhenFinished check?",
+      "explain": "Static scan of the precondition list — no DB comparison.",
+      "distractors": "Prereq timing is handled elsewhere.",
+      "options": [
+        {"text": "Whether the prerequisite finished since the last dependent run", "correct": false},
+        {"text": "Whether any jobPrecondition entry has runOnce set to false", "correct": true},
+        {"text": "Whether all prerequisites are Finished right now", "correct": false},
+        {"text": "Whether OnUpdate.RerunFinished is enabled", "correct": false}
+      ]
+    },
+    {
+      "question": "Dependent Finished, prereq unchanged, runOnce false — next idle reconcile?",
+      "explain": "matchingJob Finished + AllowsRerunWhenFinished → create again.",
+      "distractors": "Intended false outcome is not implemented.",
+      "options": [
+        {"text": "shouldCreateJob returns false", "correct": false},
+        {"text": "shouldCreateJob returns true; duplicate job (bug)", "correct": true},
+        {"text": "preconditionsAllowCreation blocks first", "correct": false},
+        {"text": "GetMatchingJob returns nil", "correct": false}
+      ]
+    },
+    {
+      "question": "When does triggerDependentConfigs enqueue dependents?",
+      "explain": "JobStatusReconciler after prereq reaches Finished.",
+      "distractors": "runOnce is checked later in shouldCreateJob.",
+      "options": [
+        {"text": "On every config reconcile", "correct": false},
+        {"text": "When a prerequisite K8s job reaches Finished", "correct": true},
+        {"text": "Only when runOnce is false", "correct": false},
+        {"text": "Only when matching job is nil", "correct": false}
+      ]
+    },
+    {
+      "question": "Why can scenario 52 pass while MAJOR [3] remains?",
+      "explain": "Test checks explicit prereq version bump, not idle resync spam.",
+      "distractors": "No prereq id dedupe exists in code.",
+      "options": [
+        {"text": "shouldCreateJob dedupes by prereq job id", "correct": false},
+        {"text": "Test bumps prereq jobVersion; no idle resync assertion", "correct": true},
+        {"text": "runOnce false is ignored in production", "correct": false},
+        {"text": "AllowsRerunWhenFinished was removed", "correct": false}
+      ]
+    }
+  ]
+}

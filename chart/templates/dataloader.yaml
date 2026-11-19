@@ -1,0 +1,44 @@
+{{/*
+TenantJobConfiguration: dataloader
+Helper: kairos.dataloaderJob
+Location: kairos-component-common/charts/kairos-components-common/templates/_dataloaderjob.tpl
+Config: dataloader.* (values.yaml)
+Entities: resources/external-entities.json (symlink to dataloader/external-entities.json)
+Job Version SHA: Auto-updated by 'make generate' from dataloader/external-entities.json
+
+The job is only rendered when the entities file exists and declares at least
+one entity; otherwise there is nothing for the dataloader to load.
+*/}}
+
+{{- $entitiesRaw := .Files.Get "resources/external-entities.json" }}
+{{- $entityCount := 0 }}
+{{- if $entitiesRaw }}
+  {{- range ($entitiesRaw | fromJsonArray) }}
+    {{- $entityCount = add $entityCount (len (default (list) .entities)) }}
+  {{- end }}
+{{- end }}
+{{- if gt $entityCount 0 }}
+
+{{- $config := include "bundle.getAppConfig" (dict "root" . "app" "dataloader") | fromYaml | default dict }}
+
+{{/*
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                            ⚠️  CRITICAL: DO NOT DELETE ⚠️                    ║
+║                                                                              ║
+║  The $jobVersion variable below is AUTO-UPDATED by 'make generate'          ║
+║  based on the dataloader/external-entities.json SHA.                        ║
+║  Deleting or modifying this variable will prevent entity reload jobs.       ║
+║                                                                              ║
+║  If you need to regenerate it, run: make generate                           ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+*/}}
+{{- $jobVersion := "1572d138b8737e81c4bcdf88f5869be185d28aaa9d41dc41f6129cdb02e510b1" }}
+
+{{ include "kairos.dataloaderJob" (dict
+  "name" (printf "%s-dataloader" .Release.Namespace)
+  "appLabel" "dataloader"
+  "Values" $config
+  "Root" .
+  "jobVersion" $jobVersion
+) }}
+{{- end }}

@@ -1,0 +1,15 @@
+{
+  "error": {
+    "client": {
+      "message": "Something went wrong in the browser. Consider reloading."
+    }
+  },
+  "home": {
+    "heading": {
+      "title": "Welcome!"
+    },
+    "paragraph": {
+      "description": "This is the start page of the Kairos Template for your application."
+    }
+  }
+}

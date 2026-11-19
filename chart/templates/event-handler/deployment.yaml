@@ -1,0 +1,66 @@
+{{/*
+================================================================================
+EVENT HANDLER DEPLOYMENT
+================================================================================
+Common Helpers: _scheduling.tpl, _security.tpl, _image.tpl, _env.tpl, 
+                _probes.tpl, _volumes.tpl
+
+Config: defaults.* + event-handler.* (values.yaml)
+App Env: (none by default — add component-specific env vars below)
+Architecture: Main container + event-adapter sidecar
+================================================================================
+*/}}
+
+{{/* Load app-specific configuration with defaults */}}
+{{- $appConfig := include "bundle.getAppConfig" (dict "root" . "app" "event-handler") | fromYaml }}
+{{- $appLabel := "event-handler" }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-%s" .Release.Namespace $appLabel }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ $appLabel }}
+spec:
+  {{- if not (default dict $appConfig.autoscaling).enabled }}
+  replicas: {{ $appConfig.replicas | default 2 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ $appLabel }}
+  template:
+    metadata:
+      labels:
+        app: {{ $appLabel }}
+    spec:
+      {{- include "kairos.scheduling" (dict "appLabel" $appLabel "Values" $appConfig "Root" .) | nindent 6 }}
+      {{- include "kairos.podSecurityContext" (dict "runAsNonRoot" true) | nindent 6 }}
+      
+      containers:
+        - name: {{ $appLabel }}
+          {{- include "kairos.image" (dict "Values" $appConfig "Root" . "appLabel" $appLabel) | nindent 10 }}
+          
+          ports:
+            - containerPort: 8080
+            - containerPort: {{ $appConfig.systemPort | default 9090 }}
+
+          env:
+            {{- include "kairos.env.common" (dict "Values" $appConfig "Root" . "appLabel" $appLabel) | nindent 12 }}
+            {{- include "kairos.env.postgres" . | nindent 12 }}
+            {{- include "kairos.env.fiber" $appConfig | nindent 12 }}
+
+            {{/* App-specific env vars — add component-specific entries here. */}}
+
+          resources:
+            {{- toYaml $appConfig.resources | nindent 12 }}
+          
+          {{- include "kairos.livenessProbe" (dict "port" ($appConfig.systemPort | default 9090) "path" "/healthz") | nindent 10 }}
+          {{- include "kairos.readinessProbe" (dict "port" ($appConfig.systemPort | default 9090) "path" "/readyz") | nindent 10 }}
+          {{- include "kairos.containerSecurityContext" . | nindent 10 }}
+          
+          volumeMounts:
+            {{- include "kairos.volumeMounts" (dict "Root" .) | nindent 12 }}
+
+      volumes:
+        {{- include "kairos.volumes" (dict "Root" .) | nindent 8 }}

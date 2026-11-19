@@ -1,0 +1,17 @@
+{{/*
+Service: web
+Helper: kairos.service
+Location: kairos-component-common/charts/kairos-components-common/templates/_service.tpl
+
+defaults.systemPort is inherited via getAppConfig. SWS has a single listener
+(8080 /health); a metrics Service port would point at nothing. Force 0 here
+so GitOps cannot re-enable it via values.
+*/}}
+{{- $appConfig := include "bundle.getAppConfig" (dict "root" . "app" "web") | fromYaml }}
+
+{{ include "kairos.service" (dict
+  "name" "web"
+  "appLabel" "web"
+  "Values" (mergeOverwrite $appConfig (dict "systemPort" 0))
+  "Root" .
+) }}

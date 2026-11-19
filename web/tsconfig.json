@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "useDefineForClassFields": false,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "types": ["vite/client", "@testing-library/jest-dom"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": [
+    "src",
+    "node_modules/@ifs-kairos/ffw-components/dist/custom-elements-jsx.d.ts",
+    "node_modules/@ifs-ds/helix-web-components/dist/custom-elements-jsx.d.ts",
+    "node_modules/@ifs-ds/helix-icons/dist/output"
+  ]
+}

@@ -1,0 +1,48 @@
+/* Different browser brands apply different default styles. This reset gives
+ * the app a shared baseline so layout and typography look consistent
+ * regardless of which browser the user is currently using. Typography defaults
+ * live in @ifs-kairos/ffw-components/base.css.
+ */
+html,
+body {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-family-theme-typography-font-family-body);
+}
+
+*,
+*:before,
+*:after {
+  box-sizing: inherit;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+}
+
+/* Scrollbar styling using Helix theme tokens - adapts to light/dark theme */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-theme-surface-border-normal) var(--color-theme-surface-border-quiet);
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--color-theme-surface-border-quiet);
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--color-theme-surface-border-normal);
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-theme-surface-border-loud);
+}

@@ -1,0 +1,8 @@
+{{/*
+PDB: web
+Helper: kairos.podDisruptionBudget
+Location: kairos-component-common/charts/kairos-components-common/templates/_pdb.tpl
+Config: defaults.podDisruptionBudget.* (values.yaml)
+*/}}
+{{- $appConfig := include "bundle.getAppConfig" (dict "root" . "app" "web") | fromYaml }}
+{{- include "kairos.podDisruptionBudget" (dict "name" (printf "%s-web" .Release.Namespace) "appLabel" "web" "Values" $appConfig "Root" .) }}

@@ -1,0 +1,8 @@
+{{/*
+ConfigMap: auth-gateway-config
+The Kyverno ClusterPolicy "inject-auth-gateway-sidecar" reads this ConfigMap
+via envFrom to configure the injected auth-gateway sidecar container.
+
+Rendering: kairos-components-common template "kairos.authGatewayConfigMap".
+*/}}
+{{- include "kairos.authGatewayConfigMap" (dict "root" . "app" "client-api") }}

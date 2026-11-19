@@ -1,0 +1,20 @@
+{{/*
+Ingress: integration-api
+Helper: kairos.ingress
+Location: kairos-component-common/charts/kairos-components-common/templates/_ingress.tpl
+Routing: /<namespace>/api/* → /api/* (rewrite)
+*/}}
+{{- $integrationApiConfig := include "bundle.getAppConfig" (dict "root" . "app" "integration-api") | fromYaml }}
+
+{{ include "kairos.ingress" (dict 
+  "name" (printf "%s-integration-api" .Release.Namespace) 
+  "appLabel" "integration-api" 
+  "Values" $integrationApiConfig 
+  "path" (printf "/%s(/)(api$|api/.*)" .Release.Namespace)
+  "pathType" "ImplementationSpecific"
+  "annotations" (dict 
+    "k8s.apisix.apache.org/timeout" `{"read": 300, "send": 300}`
+    "k8s.apisix.apache.org/client-max-body-size" "100m"
+  )
+  "Root" .
+) }}

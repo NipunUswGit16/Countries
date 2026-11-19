@@ -1,0 +1,11 @@
+{
+  "tenantInputTopics": [
+    {
+      "inputTopic": "access-management",
+      "types": [
+        "access-management.assignment-changed.1"
+      ]
+    }
+  ],
+  "outputTopic": "countries"
+}

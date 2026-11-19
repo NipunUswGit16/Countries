@@ -1,0 +1,72 @@
+{{/*
+================================================================================
+WEB FRONTEND DEPLOYMENT
+================================================================================
+Common Helpers: _scheduling.tpl, _security.tpl, _image.tpl, _env.tpl, _probes.tpl
+
+Config: defaults.* + web.* (values.yaml)
+Web Env: API_BASE_PATH, AUTH_BASE_PATH, FULLSTORY_ORG_ID, FULLSTORY_DEV_MODE
+================================================================================
+*/}}
+
+{{/* Load app-specific configuration with defaults */}}
+{{- $appConfig := include "bundle.getAppConfig" (dict "root" . "app" "web") | fromYaml }}
+{{- $appLabel := "web" }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "%s-%s" .Release.Namespace $appLabel }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ $appLabel }}
+spec:
+  {{- if not (default dict $appConfig.autoscaling).enabled }}
+  replicas: {{ $appConfig.replicas | default 2 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ $appLabel }}
+  template:
+    metadata:
+      labels:
+        app: {{ $appLabel }}
+    spec:
+      {{- include "kairos.scheduling" (dict "appLabel" $appLabel "Values" $appConfig "Root" .) | nindent 6 }}
+      {{- include "kairos.podSecurityContext" (dict "runAsUser" 101 "runAsGroup" 101 "fsGroup" 101) | nindent 6 }}
+      
+      containers:
+        - name: {{ $appLabel }}
+          {{- include "kairos.image" (dict "Values" $appConfig "Root" . "appLabel" $appLabel) | nindent 10 }}
+          
+          ports:
+            - containerPort: 8080
+
+          env:
+            {{- include "kairos.env.common" (dict "Values" $appConfig "Root" . "appLabel" $appLabel) | nindent 12 }}
+            {{- include "kairos.env.web" (dict "Values" $appConfig "Root" .) | nindent 12 }}
+
+          resources:
+            {{- toYaml $appConfig.resources | nindent 12 }}
+          
+          {{- include "kairos.livenessProbe" (dict "port" 8080 "path" "/health") | nindent 10 }}
+          {{- include "kairos.readinessProbe" (dict "port" 8080 "path" "/health") | nindent 10 }}
+          {{- include "kairos.containerSecurityContext" . | nindent 10 }}
+
+          {{/*
+            Writable emptyDir mount required by the read-only root filesystem:
+              - /runtime holds the env.js rendered at startup by the Go entrypoint
+                (web/entrypoint), which substitutes Helm-injected env vars
+                into /public/env.js and writes the result to /runtime/env.js.
+                static-web-server then serves it via the kairos-runtime virtual
+                host (see web/configs/config.toml).
+          */}}
+          volumeMounts:
+            - name: runtime
+              mountPath: /runtime
+
+      volumes:
+        - name: runtime
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi

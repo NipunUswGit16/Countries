@@ -1,0 +1,44 @@
+# Model-family catalog for resolve-models.sh.
+# Keyed by family, matched by case-insensitive substring against the harness's
+# advertised list — never a menu to pick from, only a classifier for what the
+# runtime already offers. Most specific (longest) match wins.
+
+# ── Durable: changes only when a family's position in the lineup changes ──
+families:
+  haiku:       cheap
+  composer:    cheap
+  grok:        coder
+  cursor-grok: coder   # Cursor's hosted Grok — same capability as grok, its own family because its cost class differs
+  sonnet:      coder
+  gpt-5:       coder
+  opus:        strong
+  fable:       premium
+
+# Suffixes of the same family. Sibling-scoped — see stronger() in
+# scripts/resolve-models.sh (rationale: that script's header and
+# reference/model-resolution.md).
+#
+# weak_suffixes: distilled / smaller sibling. Trades capability for cost.
+# Quality tiers prefer the base; the executor tier prefers the suffixed half.
+# The list is family-agnostic — a suffix applies to whatever family a slug
+# classifies into. Of the three, only `mini` is exercised by a family catalogued
+# below today (gpt-5 ships gpt-5-mini); `lite` and `flash` are RESERVED for
+# families a capability_overrides answer or a future catalog entry ranks (e.g. a
+# `-flash` sibling of a not-yet-listed family) — recognized, just unexercised here.
+# speed_suffixes: same weights, more serving capacity, more expensive
+# (Cursor Fast). Does NOT reduce capability. Every tier prefers the base;
+# a lone -fast slug still keeps the family's full rank.
+weak_suffixes: [mini, lite, flash]
+speed_suffixes: [fast]
+
+# ── Perishable: cost class under the IFS subscription. A DEFAULT, not a fact —
+# overridden per developer in ~/.kairos/models.yaml, and confirmed once per
+# developer via a non-blocking line the ORCHESTRATOR's Phase 1.5 step shows on
+# first run (phases/1.5-model-resolution.md), which then stamps `plan_confirmed`
+# in that file. resolve-models.sh itself never reads that key — the confirmation
+# is the orchestrator's bookkeeping, not a resolver input. Anything absent here
+# resolves to `unknown`, which is treated as metered. ──
+plan:
+  updated: 2026-08-03
+  included: [composer, cursor-grok]
+  metered:  [haiku, sonnet, opus, gpt-5, fable, grok]  # plain grok = xAI via API, not the Cursor-served variant

@@ -1,0 +1,8 @@
+{{/*
+PDB: client-api
+Helper: kairos.podDisruptionBudget
+Location: kairos-component-common/charts/kairos-components-common/templates/_pdb.tpl
+Config: defaults.podDisruptionBudget.* (values.yaml)
+*/}}
+{{- $appConfig := include "bundle.getAppConfig" (dict "root" . "app" "client-api") | fromYaml }}
+{{- include "kairos.podDisruptionBudget" (dict "name" (printf "%s-client-api" .Release.Namespace) "appLabel" "client-api" "Values" $appConfig "Root" .) }}

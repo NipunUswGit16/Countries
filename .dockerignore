@@ -1,0 +1,28 @@
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+
+# Local env / secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# Logs
+**/*.log
+**/npm-debug.log*
+**/yarn-debug.log*
+**/pnpm-debug.log*
+
+# VCS / IDE / OS
+.git
+.gitignore
+.github
+.vscode
+.idea
+.DS_Store
+
+# Local-only files that shouldn't be baked into images
+terminals/
+plans/
+.kairos/
