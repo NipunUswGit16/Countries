@@ -34,23 +34,41 @@ export const appConfig: AppConfig = {
   homeButtonEnabled: false,
 
   // Main navigation menu (left sidebar). Use this for navigation within the bounded context.
-  menuItems: [
-    {
-      type: 'item',
-      id: 'pages',
-      label: t('app.menu.pages', 'Pages'),
-      icon: 'app-generic',
-      items: [
-        {
-          type: 'item',
-          id: 'home',
-          label: t('app.menu.home', 'Home'),
-          icon: 'home',
-          data: { route: '/' },
+menuItems: [
+  {
+    type: 'item',
+    id: 'pages',
+    label: t('app.menu.pages', 'Pages'),
+    icon: 'app-generic',
+    items: [
+      {
+        type: 'item',
+        id: 'home',
+        label: t('app.menu.home', 'Home'),
+        icon: 'home',
+        data: { route: '/' },
+      },
+    ],
+  },
+
+  {
+    type: 'item',
+    id: 'countries-demo',
+    label: 'Countries Demo',
+    icon: 'app-generic',
+    items: [
+      {
+        type: 'item',
+        id: 'countries',
+        label: 'Countries',
+        icon: 'app-generic',
+        data: {
+          route: '/countries',
         },
-      ],
-    },
-  ],
+      },
+    ],
+  },
+],
 
   // Apps menu (app switcher dropdown in header). Use this for navigation between bounded contexts.
   appsMenuItems: [],

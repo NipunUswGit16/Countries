@@ -3,10 +3,12 @@
 package generated
 
 import (
+	"bitbucket.org/ifs-pd/countries/internal/domain"
 	"bitbucket.org/ifs-pd/kairos-component-common/api/integration/loader"
+	"bitbucket.org/ifs-pd/kairos-component-common/common/entities"
 )
 
 // RegisterLoaders registers all generated entity loaders with the registry.
 func RegisterLoaders(reg *loader.Registry) {
-	/* This will contain auto generated entity loaders */
+	loader.Register[domain.Country, entities.EntityId](reg, "countries")
 }

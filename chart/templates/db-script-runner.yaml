@@ -19,7 +19,7 @@ Job Version SHA: Auto-updated by 'make generate'
 ║  If you need to regenerate it, run: make generate                           ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 */}}
-{{- $jobVersion := "12dbdd2852a8fc39bf5b5b05fce12d7d9d7fea3207c4e401e70f20c9cfc33cdc" }}
+{{- $jobVersion := "ed253ccdaaadf5f4eb1e8508e028387932544069b0138491314294d06d625f50" }}
 
 {{ include "kairos.tenantJob" (dict 
   "name" (printf "%s-db-script-runner" .Release.Namespace) 

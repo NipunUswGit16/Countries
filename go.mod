@@ -17,7 +17,10 @@ require (
 	// go module
 	bitbucket.org/ifs-pd/kairos-component-common/toolkit v1.0.60
 	bitbucket.org/ifs-pd/nga-common/config v1.1.6
+	bitbucket.org/ifs-pd/nga-common/logging v1.1.7
+	bitbucket.org/ifs-pd/nga-common/postgres v1.1.0
 	github.com/gofiber/fiber/v2 v2.52.16
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/rs/xid v1.6.0
 	github.com/stretchr/testify v1.12.1
 )
@@ -29,12 +32,10 @@ require (
 	bitbucket.org/ifs-pd/nga-common/auth/v2 v2.1.6 // indirect
 	bitbucket.org/ifs-pd/nga-common/idempotency/postgres/v2 v2.0.14 // indirect
 	bitbucket.org/ifs-pd/nga-common/idempotency/v2 v2.0.2 // indirect
-	bitbucket.org/ifs-pd/nga-common/logging v1.1.7 // indirect
 	bitbucket.org/ifs-pd/nga-common/logging/logrus v1.1.7 // indirect
 	bitbucket.org/ifs-pd/nga-common/metrics/middleware/common v0.0.12 // indirect
 	bitbucket.org/ifs-pd/nga-common/metrics/middleware/fiber v1.0.19 // indirect
 	bitbucket.org/ifs-pd/nga-common/metrics/postgres v0.0.1 // indirect
-	bitbucket.org/ifs-pd/nga-common/postgres v1.1.0 // indirect
 	bitbucket.org/ifs-pd/nga-common/tenantinfo v1.1.3 // indirect
 	bitbucket.org/ifs-pd/nga-common/typederrors v1.0.22 // indirect
 	bitbucket.org/ifs-pd/nga-common/validation v0.0.10 // indirect
@@ -83,7 +84,6 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.12.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.20.3 // indirect

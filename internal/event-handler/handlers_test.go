@@ -3,9 +3,9 @@ package eventhandler
 import (
 	"testing"
 
-	eventhandlertest "bitbucket.org/ifs-pd/kairos-component-common/event-handler/test"
 	"bitbucket.org/ifs-pd/countries/internal/event-handler/config"
 	"bitbucket.org/ifs-pd/countries/internal/event-handler/request"
+	eventhandlertest "bitbucket.org/ifs-pd/kairos-component-common/event-handler/test"
 	"github.com/stretchr/testify/assert"
 )
 

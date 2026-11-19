@@ -1,8 +1,8 @@
 package fake
 
 import (
-	"bitbucket.org/ifs-pd/kairos-component-common/common/messaging"
 	"bitbucket.org/ifs-pd/countries/internal/services"
+	"bitbucket.org/ifs-pd/kairos-component-common/common/messaging"
 	"github.com/rs/xid"
 )
 

@@ -3,8 +3,8 @@ package request
 import (
 	"testing"
 
-	apicontext "bitbucket.org/ifs-pd/kairos-component-common/api/context"
 	"bitbucket.org/ifs-pd/countries/internal/api/config"
+	apicontext "bitbucket.org/ifs-pd/kairos-component-common/api/context"
 )
 
 func TestContext(t *testing.T) {

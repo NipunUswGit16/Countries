@@ -1,0 +1,43 @@
+package events
+
+import (
+	"context"
+	"time"
+
+	"bitbucket.org/ifs-pd/countries/pkg/schema"
+	"bitbucket.org/ifs-pd/kairos-component-common/common/messaging"
+	messagingEvents "bitbucket.org/ifs-pd/kairos-component-common/common/messaging/events"
+	"bitbucket.org/ifs-pd/nga-common/validation"
+	"bitbucket.org/ifs-pd/nga-common/validation/check"
+	"bitbucket.org/ifs-pd/nga-common/validation/runner"
+)
+
+var _ messaging.Event = (*messagingEvents.EventMessage[*CountryUpdatedEventV1])(nil)
+var _ messaging.MessagePayload = &CountryUpdatedEventV1{}
+
+type CountryUpdatedEventV1 struct {
+	Id        string    `json:"id"`
+	CountryId string    `json:"countryId"`
+	Name      string    `json:"name"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+var countryUpdatedValidator = validation.New(func(e *CountryUpdatedEventV1, r *runner.Runner[*CountryUpdatedEventV1]) {
+
+	check.StringField(r, "Id", e.Id).
+		NotEmpty("id cannot be empty")
+
+	check.StringField(r, "CountryId", e.CountryId).
+		NotEmpty("countryId cannot be empty")
+
+	check.StringField(r, "Name", e.Name).
+		NotEmpty("name cannot be empty")
+})
+
+func (e *CountryUpdatedEventV1) Validate(ctx context.Context) error {
+	return messaging.Validate(ctx, countryUpdatedValidator, e)
+}
+
+func (e *CountryUpdatedEventV1) ComponentName() string {
+	return schema.ComponentName
+}

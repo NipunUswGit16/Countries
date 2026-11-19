@@ -6,10 +6,10 @@ package main
 // +kairos:sql:lib:bitbucket.org/ifs-pd/nga-event-outbox/pkg/eventsender
 
 import (
-	commonapi "bitbucket.org/ifs-pd/kairos-component-common/api"
 	"bitbucket.org/ifs-pd/countries/internal/api"
 	"bitbucket.org/ifs-pd/countries/internal/api/config"
 	"bitbucket.org/ifs-pd/countries/internal/api/request"
+	commonapi "bitbucket.org/ifs-pd/kairos-component-common/api"
 )
 
 const serviceId = "client-api"

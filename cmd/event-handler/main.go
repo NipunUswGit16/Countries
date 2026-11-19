@@ -6,12 +6,12 @@ package main
 // +kairos:sql:lib:bitbucket.org/ifs-pd/kairos-component-common/event-handler
 
 import (
-	"bitbucket.org/ifs-pd/kairos-component-common/common"
-	eventhandlerCommon "bitbucket.org/ifs-pd/kairos-component-common/event-handler"
-	"bitbucket.org/ifs-pd/kairos-component-common/event-handler/config"
 	eventhandler "bitbucket.org/ifs-pd/countries/internal/event-handler"
 	ehconfig "bitbucket.org/ifs-pd/countries/internal/event-handler/config"
 	"bitbucket.org/ifs-pd/countries/internal/event-handler/request"
+	"bitbucket.org/ifs-pd/kairos-component-common/common"
+	eventhandlerCommon "bitbucket.org/ifs-pd/kairos-component-common/event-handler"
+	"bitbucket.org/ifs-pd/kairos-component-common/event-handler/config"
 )
 
 const serviceId = "event-handler"
